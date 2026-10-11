@@ -13,6 +13,6 @@ import MacPilotRightClickKit
 /// MacPilot 主窗口内的 Finder 右键菜单设置页。
 struct RightClickMenuSettingsView: View {
     var body: some View {
-        RightClickSettingsHost()
+        RightClickSettingsHost(extensionOperation: FinderExtensionSettingsOperation.perform)
     }
 }

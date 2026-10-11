@@ -108,5 +108,5 @@ struct RightClickSettingsView: View {
 
 
 #Preview {
-    RightClickSettingsView()
+    RightClickSettingsHost(extensionOperation: { _ in false })
 }

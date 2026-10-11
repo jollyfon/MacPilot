@@ -48,6 +48,30 @@ extension MacPilotModel {
     }
 }
 
+enum FinderExtensionSettingsOperation {
+    @MainActor
+    static func perform(_ enabled: Bool?) async throws -> Bool {
+        let application = Bundle.main.bundleURL
+        guard FileManager.default.fileExists(atPath: application
+            .appendingPathComponent("Contents/PlugIns/FinderSync.appex").path) else {
+            throw NSError(domain: "MacPilot.FinderSyncRegistration", code: 1,
+                userInfo: [NSLocalizedDescriptionKey:
+                    AppLocalization.localized("The Finder extension is missing from this app. Install the complete MacPilot app bundle.")])
+        }
+        return try await Task.detached(priority: .userInitiated) {
+            if let enabled {
+                return try FinderSyncRegistration.setEnabledByUser(
+                    enabled, at: application, execute: FinderSyncRecoveryRunner.run
+                )
+            }
+            return try FinderSyncRegistration.isElectedForUse(
+                in: FinderSyncRecoveryRunner.run(FinderSyncRegistration.queryArguments()),
+                for: application
+            )
+        }.value
+    }
+}
+
 private enum FinderSyncRecoveryRunner {
     /// Registration runs off the main actor, with a deadline for each command
     /// so an unresponsive system registry cannot hold recovery indefinitely.

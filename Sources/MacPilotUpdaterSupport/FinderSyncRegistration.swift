@@ -3,6 +3,7 @@ import Foundation
 public enum FinderSyncRegistrationError: Error, Equatable, LocalizedError {
     case journalTargetMismatch
     case restorationNotConfirmed
+    case disableNotConfirmed
 
     public var errorDescription: String? {
         switch self {
@@ -10,12 +11,53 @@ public enum FinderSyncRegistrationError: Error, Equatable, LocalizedError {
             "FinderSync recovery marker targets a different application; recovery was refused."
         case .restorationNotConfirmed:
             "PlugInKit did not confirm FinderSync enabled for the target application."
+        case .disableNotConfirmed:
+            "PlugInKit did not confirm FinderSync disabled."
         }
     }
 }
 
 public enum FinderSyncRegistration {
     public static let extensionBundleIdentifier = "com.misswell.macpilot.finder-sync"
+
+    /// Explicit settings action, distinct from automatic recovery which must
+    /// preserve an unmarked user-disabled election.
+    public static func setEnabledByUser(
+        _ enabled: Bool,
+        at applicationURL: URL,
+        journal: FinderSyncRecoveryJournal = .standard,
+        execute: ([String]) throws -> String
+    ) throws -> Bool {
+        try Task<Never, Never>.checkCancellation()
+        return try journal.withExclusiveLock { access in
+            if let intent = try access.readIntent(), !intent.matches(applicationURL: applicationURL) {
+                throw FinderSyncRegistrationError.journalTargetMismatch
+            }
+            let initialQuery = try execute(queryArguments())
+            if !enabled {
+                _ = try execute(["-e", "ignore", "-i", extensionBundleIdentifier])
+                guard try !isElectedForUse(in: execute(queryArguments())) else {
+                    throw FinderSyncRegistrationError.disableNotConfirmed
+                }
+                // An explicit disable cancels this target's pending recovery.
+                try access.clearIntent()
+                return false
+            }
+            if isElectedForUse(in: initialQuery, for: applicationURL) {
+                try access.clearIntent()
+                return true
+            }
+            try access.writeIntent(for: applicationURL)
+            try refreshCurrentTargetAndRestore(
+                applicationURL: applicationURL,
+                electionWasEnabled: isElectedForUse(in: initialQuery),
+                execute: { _ = try execute($0) },
+                query: execute,
+                access: access
+            )
+            return true
+        }
+    }
 
     public static func withSuspendedElection(
         applicationURL: URL,

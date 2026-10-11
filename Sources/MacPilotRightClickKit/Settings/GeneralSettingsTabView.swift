@@ -18,9 +18,12 @@ struct GeneralSettingsTabView: View {
     private var logger
 
     @EnvironmentObject var store: AppState
+    @EnvironmentObject private var extensionController: FinderExtensionSettingsController
     @ObservedObject private var bookmarkManager = AppState.shared.bookmarkManager
 
-    @State private var finderSyncStatus: PermissionStatus = .unknown
+    private var finderSyncStatus: PermissionStatus {
+        extensionController.isEnabled ? .enabled : .disabled
+    }
     @State private var accessibilityStatus: PermissionStatus = .unknown
     @State private var showFolderPermissionsSheet = false
 
@@ -65,25 +68,38 @@ struct GeneralSettingsTabView: View {
                     Text(appLocalized: "Main Controls")
                         .font(.headline)
                     Toggle(isOn: Binding(
-                        get: { finderSyncStatus == .enabled },
+                        get: { extensionController.isEnabled },
                         set: { newValue in
-                            if newValue {
-                                // 开启：如果未启用，打开 Finder 扩展设置
-                                if !FIFinderSyncController.isExtensionEnabled {
-                                    openFileProviderSettings()
-                                }
-                            } else {
-                                // 关闭：同样打开设置让用户手动关闭
-                                openFileProviderSettings()
-                            }
+                            Task { await extensionController.setEnabled(newValue) }
                         }
                     )) {
                         Text(appLocalized: "Enable MacPilot Finder extension")
+                    }
+                    .toggleStyle(.switch)
+                    .disabled(extensionController.isBusy)
+
+                    if extensionController.isBusy {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text(appLocalized: "Updating Finder extension…")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
 
                     Text(appLocalized: "Enable MacPilot Finder extension to show its actions in Finder context menus")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    if let error = extensionController.errorMessage {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(appLocalized: "Could not change Finder extension. Try enabling it in System Settings.")
+                            Text(error).font(.caption).foregroundStyle(.secondary)
+                        }
+                        .font(.caption)
+                        .padding(12)
+                        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.orange.opacity(0.35)))
+                    }
                 }
 
                 // MARK: - 第二组：权限
@@ -93,8 +109,12 @@ struct GeneralSettingsTabView: View {
 
                     // Finder 扩展状态
                     LabeledContent {
-                        Text(finderSyncStatus.description)
-                            .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            Text(finderSyncStatus.description).foregroundColor(.secondary)
+                            Button(AppLocalization.localized("Settings…")) {
+                                openFileProviderSettings()
+                            }
+                        }
                     } label: {
                         Label(AppLocalization.localized("Finder Extension"), systemImage: finderSyncStatus.icon)
                             .foregroundColor(finderSyncStatus.color)
@@ -175,8 +195,10 @@ struct GeneralSettingsTabView: View {
         .onAppear {
             updatePermissionStatus()
         }
+        .task { await extensionController.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             updatePermissionStatus()
+            Task { await extensionController.refresh() }
         }
         .alert(
             Text(appLocalized: "Invalid Folder"),
@@ -206,9 +228,6 @@ struct GeneralSettingsTabView: View {
     // MARK: - 权限状态检测
 
     private func updatePermissionStatus() {
-        // Finder 扩展状态
-        finderSyncStatus = FIFinderSyncController.isExtensionEnabled ? .enabled : .disabled
-
         // 辅助功能权限检测
         accessibilityStatus = PermissionChecker.hasAccessibilityPermission() ? .enabled : .disabled
     }
@@ -221,7 +240,7 @@ struct GeneralSettingsTabView: View {
 
     private func openFileProviderSettings() {
         // 打开系统设置的 Finder 扩展管理界面。
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.ExtensionsPreferences")!)
+        FIFinderSyncController.showExtensionManagementInterface()
     }
 
     private func openAccessibilitySettings() {

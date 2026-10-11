@@ -309,6 +309,84 @@ struct FinderSyncRegistrationTests {
         )
     }
 
+    @Test func explicitEnableRegistersTheCurrentBundleAndConfirmsItsElection() throws {
+        try withTemporaryJournal { journal in
+            let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
+            let stale = URL(fileURLWithPath: "/tmp/old/MacPilot.app")
+            var elected = false
+            var registered = stale
+            var commands: [[String]] = []
+            let result = try FinderSyncRegistration.setEnabledByUser(true, at: app, journal: journal) { arguments in
+                commands.append(arguments)
+                if arguments.first == "-a" { registered = app }
+                if arguments.contains("use") { elected = true }
+                return finderSyncOutput(enabled: elected, at: registered)
+            }
+            #expect(result)
+            #expect(commands.contains(["-a", app.appendingPathComponent("Contents/PlugIns/FinderSync.appex").path]))
+            #expect(commands.contains(["-e", "use", "-i", FinderSyncRegistration.extensionBundleIdentifier]))
+            let pendingIntent = try journal.withExclusiveLock { try $0.readIntent() }
+            #expect(pendingIntent == nil)
+        }
+    }
+
+    @Test func explicitEnableRefusesToReportSuccessForAnEnabledStaleCopy() throws {
+        try withTemporaryJournal { journal in
+            let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
+            let stale = URL(fileURLWithPath: "/tmp/old/MacPilot.app")
+            #expect(throws: FinderSyncRegistrationError.restorationNotConfirmed) {
+                try FinderSyncRegistration.setEnabledByUser(true, at: app, journal: journal) { _ in
+                    finderSyncOutput(enabled: true, at: stale)
+                }
+            }
+            let pendingIntent = try journal.withExclusiveLock { try $0.readIntent() }
+            #expect(pendingIntent != nil)
+        }
+    }
+
+    @Test func explicitDisableCancelsMatchingPendingRecoveryAfterConfirmation() throws {
+        try withTemporaryJournal { journal in
+            let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
+            try journal.withExclusiveLock { try $0.writeIntent(for: app) }
+            var elected = true
+            let result = try FinderSyncRegistration.setEnabledByUser(false, at: app, journal: journal) { arguments in
+                if arguments.contains("ignore") { elected = false }
+                return finderSyncOutput(enabled: elected, at: app)
+            }
+            #expect(!result)
+            let pendingIntent = try journal.withExclusiveLock { try $0.readIntent() }
+            #expect(pendingIntent == nil)
+        }
+    }
+
+    @Test func explicitDisableRequiresAFreshDisabledQuery() throws {
+        try withTemporaryJournal { journal in
+            let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
+            try journal.withExclusiveLock { try $0.writeIntent(for: app) }
+            #expect(throws: FinderSyncRegistrationError.disableNotConfirmed) {
+                try FinderSyncRegistration.setEnabledByUser(false, at: app, journal: journal) { _ in
+                    finderSyncOutput(enabled: true, at: app)
+                }
+            }
+            let pendingIntent = try journal.withExclusiveLock { try $0.readIntent() }
+            #expect(pendingIntent != nil)
+        }
+    }
+
+    @Test func explicitChangeRefusesAnotherApplicationsPendingRecovery() throws {
+        try withTemporaryJournal { journal in
+            let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
+            try journal.withExclusiveLock { try $0.writeIntent(for:
+                URL(fileURLWithPath: "/tmp/other/MacPilot.app")) }
+            #expect(throws: FinderSyncRegistrationError.journalTargetMismatch) {
+                try FinderSyncRegistration.setEnabledByUser(true, at: app, journal: journal) { _ in
+                    Issue.record("A conflicting recovery must not mutate registration")
+                    return ""
+                }
+            }
+        }
+    }
+
     private func withTemporaryJournal<T>(_ body: (FinderSyncRecoveryJournal) throws -> T) throws -> T {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("FinderSyncRegistrationTests-\(UUID().uuidString)", isDirectory: true)
