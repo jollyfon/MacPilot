@@ -2008,3 +2008,25 @@ MacPilot 手动黑屏不会产生系统显示休眠通知，因此 held-blank �
 回归测试从实际显示休眠／唤醒通知入口验证同步重启扫描、重试不替换管理器、旧信号不授权解锁、新信号恢复解锁与取消剩余恢复任务。实机验收步骤见 `docs/AWAKE_MANUAL_TESTS.md`；发布不替换正在运行的本机安装，升级后仍需核对真实设备的发现和解锁。
 
 验证：修正一个超时回归用例未禁用真实自动锁屏的问题后，4 条隔离恢复回归与 BLE／屏控纯策略测试共 26 条通过；全新 scratch 的 Release 构建启用 `-Xswiftc -warnings-as-errors` 通过。按用户要求停止完整测试，未把被中断或并发失败的全量运行视为通过；后续测试不得锁屏、熄屏或注入真实登录按键。Beta 发布仅递增序号，本次为 `v1.1.522-beta.2`。
+
+## 七十一、原生快速搜索：应用启动 + 文件名搜索，一个独立模块（v1.2.1-beta.1）
+
+只做两件事：搜应用并启动／激活，搜文件与文件夹的**名字**并打开或在访达中显示。其他启动器的功能一概没做，没有 Electron、没有新的常驻守护进程、没有自建全盘索引，技术栈仍是 Swift 6 + SwiftUI/AppKit。目录 `Sources/MacPilot/QuickSearch/`，功能键 `quickSearch`，注册进 `ManagedFeature` 与 `FeatureRegistry`，配置分区交给 `ConfigStore` 的 `featureKeys`／`shortcutKeys`。已有的东西一律复用：应用扫描走 Dock Groups 的 `InstalledAppResolver`，启动走 `AppLaunchService`，快捷键沿用 `SmartCaptureShortcutBinding` 的数据结构，设置卡片用 `SettingsCard`。
+
+几个必须记下来的事实。
+
+**Spotlight 的可用范围问不出来。** macOS 27 上 `NSMetadataQuery` 已经不再响应 `+supportedScopes`／`+systemSearchScopes`／`+userSearchScopes` 这些类方法，没有同步 API 能回答「这片目录到底建了索引没有」。能用的公开信号只有：目录可读、`query.start()` 是否成功，以及再发一条同样走 Spotlight 的宽松探测查询看这片范围能不能给出任何东西。所以空结果分三种状态：查不了、这片范围没索引、真的没有匹配——第一种必须把原因显示出来，不能写成「没有匹配的文件」。结论按范围集缓存，不每次输入都探测。
+
+**首批文件结果的延迟不在这个模块手里。** 用与生产完全一致的谓词形状（`kMDItemDisplayName`／`kMDItemFSName` 上的 `*词*` LIKE）跑真实 Spotlight 采样：用户主目录范围 48 轮，`DidFinishGathering` P50 约 900ms、P95 约 1030ms，第一次查询要 2.9–3.6s（命中上万的词）；把范围缩到 `~/Documents`、只有 5 条命中，仍然要 810ms 左右——这是 `mdworker` 的固定往返成本，不是结果规模造成的。更要紧的是这台机器上 `NSMetadataQueryDidUpdate` 在 `DidFinishGathering` 之前**一次都没发过**，所以可见的文件结果只能等采集完成。方案里 300ms 的首批结果目标，在不自建索引的前提下达不到；面板和应用结果照常秒出，文件段落显式显示「正在搜索文件」，实测分布记录在案。
+
+**呼出路径上不能顺手初始化主设置 UI。** 面板是 `.nonactivatingPanel` + `orderFrontRegardless`，`hidesOnDeactivate = false`，收起后不把焦点还给 MacPilot 自己的主窗口；执行主操作是「校验存在 → 关面板 → 启动 → 成功才记使用次数 → 失败只给一条轻量提示」，绝不重新激活主设置窗口。索引在 `start()` 里不扫盘、不起 Spotlight，扫描派到后台队列（实测主线程阻塞 0.01ms），过期只在面板打开时按需刷新；功能关闭时没有任何定时器在跑。
+
+**中文输入法与原生编辑优先。** `markedRange()` 非空时 Enter／Esc／方向键全部交回输入法，不当作 Launcher 的执行或导航事件；Cmd+A/C/V 走原生文本编辑。
+
+**Carbon 注册状态必须当真。** `RegisterEventHotKey` 的返回码要检查：`eventHotKeyExistsErr`（-9878）意味着快捷键被别的 App 或别的功能占用，这时不能把开关标成「已启用」，设置页显示失败原因并允许重试；录入失败不写盘，原来有效的绑定保持不动。另一点：Carbon 的热键注册是**进程级**的，测试里同进程并发起多个 harness 会互相抢注册，所以快捷键相关套件全部 `@Suite(.serialized)` 并在 teardown 里停干净。
+
+**配置继续按只增不减来。** `quickSearch` 段逐键 `decodeIfPresent`，坏一段只降级一段并记进 `unreadableSections`；老版本不认识这个键也能读同一份文件，且 `enabledFeatures` 里的功能名在降级—升级往返后仍然把功能打开。`ConfigurationSchemaContractTests` 里锁住了历史键集。
+
+实测（`QuickSearchPerformanceTests` 每次运行把数字打到 stderr）：400 条索引的缓存应用搜索 P50 1.8ms／P95 2.2ms；真实 `NSPanel` 构建 + 首帧布局 P95 8.9ms（最大 130ms，首次冷构建）；模型侧「呼出 + 填结果」P95 2.4ms；100 次开关面板后残留面板 0、观察者 0、活动查询 0；模块驻留成本用 `task_info` 直接读进程，RSS 与物理足迹在开启—100 次开关—停止全程增长小于 0.1MB（阈值 32MB）。
+
+验证：QuickSearch 全部套件加配置／注册表／契约／资源相关套件共 118 条测试 16 个套件通过，配置与快捷键、Feature、Resource 相关 84 条通过；全新 scratch 目录的 Release 构建带 `-Xswiftc -warnings-as-errors` 通过（118.94s）。测试全部走注入的应用启动与文件查询替身，不打开用户的应用、不动用户文件。尚未完成：`Tests/Performance/README.md` 的 Phase 2 三十分钟采样要对着**已安装的进程**跑，发布不会替换本机正在运行的 `/Applications/MacPilot.app`，所以那轮 CPU/RSS 长时曲线还没测；替身适配器也不覆盖真实图标缓存与真实 Spotlight 行为，升级后需要手工验收一次呼出、启动与文件段落。
