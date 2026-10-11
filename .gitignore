@@ -11,3 +11,18 @@ MacPilot-*.zip
 .zcode/**
 drafts/**
 MacPilot-*.dmg
+
+# 本地工具产物（Mimosa 钩子状态、Qoder 预览站、ZCode 同步配置）
+.mimosa/
+*.qoder.site
+site/
+.zcodeignore
+
+# Xcode / SwiftPM
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.ipa
+*.dSYM
+*.dSYM.zip
