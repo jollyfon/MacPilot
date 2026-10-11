@@ -27,5 +27,6 @@ final class FeatureRegistry {
         manager.register(model.dockGroups)
         manager.register(model.localPorts)
         manager.register(model.rightClickFeature)
+        manager.register(model.quickSearch)
     }
 }

@@ -8,7 +8,7 @@ final class ConfigStore {
     private static let featureKeys: Set<String> = [
         "enabledFeatures", "bleUnlock", "fileCompression", "screenCapture",
         "screenRecording", "pictureInPicture", "inputSources", "smoothScrolling",
-        "awake", "awakeTriggers", "remoteControl", "dockGroups"
+        "awake", "awakeTriggers", "remoteControl", "dockGroups", "quickSearch"
     ]
     private static let shortcutKeys: [String: Set<String>] = [
         "screenCapture": [
@@ -19,6 +19,7 @@ final class ConfigStore {
             "objectCutoutShortcut", "pinCaptureShortcut", "postSelectionPinShortcut"
         ],
         "clipboard": ["hotkey"],
+        "quickSearch": ["hotkey"],
         "inputSources": ["shortcuts", "globalShortcutEnabled"]
     ]
 

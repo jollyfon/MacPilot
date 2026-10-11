@@ -1,10 +1,10 @@
 # Repository Guidelines
 
-Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftPM, macOS 14+) with 18 independently switchable feature modules: app inactivity rules, scheduled launch, Awake keep-awake, BLE proximity lock/unlock, iPhone remote control, capture/screenshot tooling, dock groups, local ports, and more.
+Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftPM, macOS 14+) with 19 independently switchable feature modules: app inactivity rules, scheduled launch, Awake keep-awake, BLE proximity lock/unlock, iPhone remote control, capture/screenshot tooling, dock groups, local ports, quick search (app launcher + Spotlight file-name search), and more.
 
 ## Project Structure & Module Organization
 
-- `Sources/MacPilot/` — main executable target, one subdirectory per feature cluster (`Awake/`, `BLE/`, `DockGroups/`, `RemoteControl/` (remote server), `InputCore/` (remote input injection), `SnapzyCapture/`, `SmoothScrolling/`, …) plus `MacPilotApp.swift` (core), `BLEUnlock.swift` (proximity lock/unlock), and `SoftwareUpdate.swift` (release checks, validation, and update orchestration).
+- `Sources/MacPilot/` — main executable target, one subdirectory per feature cluster (`Awake/`, `BLE/`, `DockGroups/`, `RemoteControl/` (remote server), `InputCore/` (remote input injection), `SnapzyCapture/`, `SmoothScrolling/`, `QuickSearch/` (non-activating panel, Carbon hot key, pinyin-ranked app index, `NSMetadataQuery` file search), …) plus `MacPilotApp.swift` (core), `BLEUnlock.swift` (proximity lock/unlock), and `SoftwareUpdate.swift` (release checks, validation, and update orchestration).
 - `Packages/MacPilotRemoteProtocol/` — local SwiftPM package with the wire protocol + transport shared by macOS and iOS: framing, crypto, capability bits and the binary realtime-input codec. Both platforms compile it; wire changes must keep old peers decoding.
 - `iOS/MacPilotRemote/` — **PilotNest**, the iOS companion app (`com.misswell.macpilot.remote`, iOS 17+, Xcode project generated from `project.yml`; see "iOS companion app" below).
 - `website/` — Chinese product site (Vinext/React, deployed to Cloudflare); Node ≥ 22.13, its own `package.json` and lint setup.
@@ -121,6 +121,16 @@ Everything persisted under `StoredConfiguration` (`config.json` + sidecar files)
 - **New fields must decode tolerantly** — `decodeIfPresent` + default, never a required key; keep the required-key set identical to what the oldest supported release writes.
 - **Section isolation:** `StoredConfiguration.init(from:)` decodes every section through its `section(...)` helper; one unreadable section falls back to that section's defaults and is recorded in `unreadableSections` so `load()` quarantines the raw file before any save. Do not bypass this helper for persisted sections.
 - **The tripwire test** `Tests/MacPilotTests/ConfigurationSchemaContractTests.swift` asserts every persisted type still encodes its historical key set (append-only). A failing contract means your change would strand downgrades — keep the key, don't delete the assertion.
+
+## Quick Search (invariant)
+
+- File search goes through `NSMetadataQuery` only. Never substitute `FileManager` recursive traversal of the home directory or disk, and never build a self-maintained full-disk index — Spotlight is the index this feature is designed to ride.
+- "No results" and "cannot search" are different states. When the index is off, the selected scope is not indexed, no scope is available, or the query refused to start, the panel shows that reason (`QuickSearchIndexIssue`); it must never be presented as "no matching files". Do not add a code path that reports an empty result list without first having a positive verdict that the scope is searchable.
+- One in-flight query at a time: every keystroke is 150ms-debounced and tagged with an increasing generation, a new query terminates the previous one and its notification observers, and closing the panel stops the query. Results from a stale generation must be dropped.
+- Empty-scope decisions belong to the model: `startFileSearch` reports `.noScopeSelected` instead of dispatching a query with an empty scope array, because Spotlight would silently widen the search on its own.
+- The panel opens without the main settings window: never initialise the whole settings UI on summon; the pinyin and initials of an app are normalised when the index is built, not per keystroke; disk enumeration and `Info.plist` reads stay off the main actor; no timer scans the disk while the panel is closed.
+- Carbon registration status is reported honestly (`isHotKeyRegistered`, `lastRegistrationStatus`). A failed `RegisterEventHotKey` must show its reason in the settings page and must not mark the shortcut as enabled; rejecting or conflicting with another feature keeps the previously valid binding and writes no config.
+- Validate the QuickSearch suites plus `ConfigurationSchemaContractTests`, `ConfigStoreTests` and `QuickSearchPersistenceTests` after touching this module. `QuickSearchHotKeyTests` is `.serialized` because Carbon registration is process-global; other suites use `Harness.quietHotkey` (an intentionally invalid binding) so they never grab a real key combination.
 
 ## Clipboard history and preview (invariant)
 

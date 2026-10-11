@@ -25,7 +25,8 @@ struct ConfigurationSchemaContractTests {
             inputSources: InputSourceSettings(), windowSwitcher: WindowSwitcherSettings(),
             smoothScrolling: SmoothScrollSettings(), clipboard: ClipboardSettings(),
             awake: .standard, awakeTriggers: [], awakeProfiles: [],
-            remoteControl: RemoteControlSettings(), dockGroups: DockGroupsSettings()
+            remoteControl: RemoteControlSettings(), dockGroups: DockGroupsSettings(),
+            quickSearch: QuickSearchSettings()
         )
         try assertEncodedKeys(
             of: configuration,
@@ -36,7 +37,7 @@ struct ConfigurationSchemaContractTests {
                 "bleUnlock", "fileCompression", "screenCapture", "screenRecording",
                 "pictureInPicture", "inputSources", "windowSwitcher", "smoothScrolling",
                 "clipboard", "awake", "awakeTriggers", "awakeProfiles", "remoteControl",
-                "dockGroups"
+                "dockGroups", "quickSearch"
             ]
         )
     }

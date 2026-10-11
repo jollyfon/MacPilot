@@ -1436,6 +1436,118 @@ enum AppText {
         "localPortsRescanFailed": "The stop request was sent, but the port could not be checked again.",
     ]
 
+    /// 快速搜索的文案。与其它新功能一样单独成表，不去挤已经非常密的 `chinese`
+    /// 字典（那里加条目会拖慢类型检查）。
+    private static let quickSearchChinese: [String: String] = [
+        "quickSearch": "快速搜索",
+        "quickSearchSubtitle": "呼出一个输入框，启动应用、打开文件或文件夹。",
+        "quickSearchPlaceholder": "搜索应用、文件或文件夹…",
+        "quickSearchClearQuery": "清空搜索词",
+        "quickSearchOpenNow": "打开快速搜索",
+        "quickSearchKindApplication": "应用",
+        "quickSearchKindFile": "文件",
+        "quickSearchKindFolder": "文件夹",
+        "quickSearchSearching": "正在搜索…",
+        "quickSearchNoResults": "没有与「%@」匹配的应用或文件",
+        "quickSearchRecentEmpty": "输入即可搜索应用与文件；最近用过的应用会显示在这里。",
+        "quickSearchHintSelect": "选择",
+        "quickSearchHintOpen": "打开",
+        "quickSearchHintReveal": "在 Finder 中显示",
+        "quickSearchHintClose": "关闭",
+        "quickSearchIndexBuilding": "应用列表正在建立…",
+        "quickSearchIndexDisabled": "Spotlight 搜索当前不可用（索引已关闭或尚未建立），文件结果无法确认。",
+        "quickSearchIndexScopeMissing": "所选目录没有被 Spotlight 索引，这部分查不出结果。",
+        "quickSearchIndexNoScope": "还没有可搜索的范围，请在下方选择主目录、整台 Mac 或自定义目录。",
+        "quickSearchIndexUnavailable": "这次文件查询没能启动，应用结果不受影响。",
+        "quickSearchStatusDisabled": "未启用",
+        "quickSearchStatusStarting": "启动中",
+        "quickSearchStatusReady": "就绪",
+        "quickSearchStatusPresenting": "面板已打开",
+        "quickSearchStatusSearching": "正在搜索",
+        "quickSearchStatusStopping": "正在停止",
+        "quickSearchIndexCount": "已索引 %d 个应用",
+        "quickSearchRefreshIndex": "重新扫描应用",
+        "quickSearchRuntimeTitle": "运行状态",
+        "quickSearchHotkey": "全局快捷键",
+        "quickSearchHotkeyRecord": "点击后按下新的组合键；Esc 取消",
+        "quickSearchHotkeyInvalid": "这个组合不可用：需要修饰键，或使用了被系统保留的按键。",
+        "quickSearchHotkeyRegistrationFailed": "快捷键注册失败（系统返回 %d），当前组合并未生效，请换一个组合。",
+        "quickSearchHotkeyConflict": "该组合已被「%@」占用，请换一个组合。",
+        "quickSearchHotkeyActive": "快捷键已注册，按 %@ 即可呼出。",
+        "quickSearchHotkeyInactive": "快捷键当前没有注册，呼出不可用。",
+        "quickSearchFileSearchTitle": "文件搜索范围",
+        "quickSearchScopeHome": "个人目录",
+        "quickSearchScopeEntireMac": "整台 Mac",
+        "quickSearchScopeCustom": "指定目录",
+        "quickSearchScopeHint": "文件名搜索只走系统的 Spotlight 索引，不会自己遍历磁盘；未被索引的目录查不出结果。",
+        "quickSearchCustomDirectoriesTitle": "指定目录",
+        "quickSearchAddDirectory": "添加目录…",
+        "quickSearchRemoveDirectory": "移除",
+        "quickSearchNoCustomDirectories": "还没有添加目录。",
+        "quickSearchCustomDirectoriesLimit": "最多 %d 个目录。",
+        "quickSearchErrorApplicationMissing": "%@ 已经不在原来的位置了。",
+        "quickSearchErrorLaunchFailed": "%@ 启动失败。",
+        "quickSearchErrorItemMissing": "%@ 已不存在或无法访问。",
+        "quickSearchErrorOpenFailed": "%@ 打开失败。",
+        "quickSearchErrorRevealFailed": "无法在 Finder 中显示 %@。",
+        "quickSearchErrorCloudUnavailable": "%@ 还只在云端，需要先下载。",
+    ]
+
+    private static let quickSearchEnglish: [String: String] = [
+        "quickSearch": "Quick Search",
+        "quickSearchSubtitle": "One field to launch an app or open a file or folder.",
+        "quickSearchPlaceholder": "Search apps, files and folders…",
+        "quickSearchClearQuery": "Clear search",
+        "quickSearchOpenNow": "Open Quick Search",
+        "quickSearchKindApplication": "App",
+        "quickSearchKindFile": "File",
+        "quickSearchKindFolder": "Folder",
+        "quickSearchSearching": "Searching…",
+        "quickSearchNoResults": "No app or file matches “%@”",
+        "quickSearchRecentEmpty": "Start typing to search apps and files. Recently used apps appear here.",
+        "quickSearchHintSelect": "Select",
+        "quickSearchHintOpen": "Open",
+        "quickSearchHintReveal": "Reveal in Finder",
+        "quickSearchHintClose": "Close",
+        "quickSearchIndexBuilding": "Building the app list…",
+        "quickSearchIndexDisabled": "Spotlight search is unavailable (indexing is off or still building), so file results can't be confirmed.",
+        "quickSearchIndexScopeMissing": "The selected folders are not indexed by Spotlight, so they can't be searched.",
+        "quickSearchIndexNoScope": "No searchable scope is selected. Choose Home, the whole Mac, or a custom folder below.",
+        "quickSearchIndexUnavailable": "This file query couldn't start. App results are unaffected.",
+        "quickSearchStatusDisabled": "Disabled",
+        "quickSearchStatusStarting": "Starting",
+        "quickSearchStatusReady": "Ready",
+        "quickSearchStatusPresenting": "Panel open",
+        "quickSearchStatusSearching": "Searching",
+        "quickSearchStatusStopping": "Stopping",
+        "quickSearchIndexCount": "%d apps indexed",
+        "quickSearchRefreshIndex": "Rescan apps",
+        "quickSearchRuntimeTitle": "Runtime",
+        "quickSearchHotkey": "Global shortcut",
+        "quickSearchHotkeyRecord": "Click, then press a new combination; Esc cancels",
+        "quickSearchHotkeyInvalid": "This combination can't be used: it needs a modifier, or the key is reserved by the system.",
+        "quickSearchHotkeyRegistrationFailed": "Shortcut registration failed (system status %d). The combination is not active — choose another one.",
+        "quickSearchHotkeyConflict": "This combination already belongs to “%@”. Choose another one.",
+        "quickSearchHotkeyActive": "Registered — press %@ to open Quick Search.",
+        "quickSearchHotkeyInactive": "The shortcut isn’t registered right now, so the hot key won’t open the panel.",
+        "quickSearchFileSearchTitle": "File search scope",
+        "quickSearchScopeHome": "Home folder",
+        "quickSearchScopeEntireMac": "Whole Mac",
+        "quickSearchScopeCustom": "Selected folders",
+        "quickSearchScopeHint": "File-name search uses the system Spotlight index only — it never walks the disk itself. Folders outside the index return nothing.",
+        "quickSearchCustomDirectoriesTitle": "Selected folders",
+        "quickSearchAddDirectory": "Add folder…",
+        "quickSearchRemoveDirectory": "Remove",
+        "quickSearchNoCustomDirectories": "No folders added yet.",
+        "quickSearchCustomDirectoriesLimit": "Up to %d folders.",
+        "quickSearchErrorApplicationMissing": "%@ is no longer where it was.",
+        "quickSearchErrorLaunchFailed": "%@ couldn't be launched.",
+        "quickSearchErrorItemMissing": "%@ no longer exists or can't be accessed.",
+        "quickSearchErrorOpenFailed": "%@ couldn't be opened.",
+        "quickSearchErrorRevealFailed": "Couldn't reveal %@ in Finder.",
+        "quickSearchErrorCloudUnavailable": "%@ is still in the cloud and needs to be downloaded.",
+    ]
+
     static func value(_ key: String, language: AppLanguage, arguments: [CVarArg]) -> String {
         let useChinese: Bool
         switch language {
@@ -1471,7 +1583,8 @@ enum AppText {
             screenCaptureFeedbackChinese,
             dockGroupsChinese,
             localPortsChinese,
-            versionManagerChinese
+            versionManagerChinese,
+            quickSearchChinese
         ]
     }
 
@@ -1484,7 +1597,8 @@ enum AppText {
             screenCaptureFeedbackEnglish,
             dockGroupsEnglish,
             localPortsEnglish,
-            versionManagerEnglish
+            versionManagerEnglish,
+            quickSearchEnglish
         ]
     }
 
@@ -1988,6 +2102,7 @@ final class MacPilotModel: ObservableObject {
         var awakeProfiles: [AwakeSessionProfile]
         var remoteControl: RemoteControlSettings
         var dockGroups: DockGroupsSettings
+        var quickSearch: QuickSearchSettings
 
         /// Spelled out because the custom `init(from:)` suppresses the
         /// synthesized conformance, and `launchesAtLoginWasStored` must stay a
@@ -2000,10 +2115,10 @@ final class MacPilotModel: ObservableObject {
             case bleUnlock, fileCompression
             case screenCapture, screenRecording, pictureInPicture
             case inputSources, windowSwitcher, smoothScrolling, clipboard
-            case awake, awakeTriggers, awakeProfiles, remoteControl, dockGroups
+            case awake, awakeTriggers, awakeProfiles, remoteControl, dockGroups, quickSearch
         }
 
-        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, launchesAtLogin: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, updateChannel: AppChannel = .stable, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], awakeProfiles: [AwakeSessionProfile], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings) {
+        init(enabledFeatures: Set<MainSection>, rules: [QuitRule], isEnforcing: Bool, language: AppLanguage, launchRules: [LaunchRule], isLaunchSchedulingEnabled: Bool, launchesAtLogin: Bool, lastScheduledBootSession: String?, automaticUpdateChecks: Bool, updateChannel: AppChannel = .stable, bleUnlock: BLEUnlockSettings, fileCompression: FolderCompressionSettings, screenCapture: ScreenCaptureSettings, screenRecording: ScreenRecordingSettings, pictureInPicture: PictureInPictureSettings, inputSources: InputSourceSettings, windowSwitcher: WindowSwitcherSettings, smoothScrolling: SmoothScrollSettings, clipboard: ClipboardSettings, awake: AwakeSettings, awakeTriggers: [AwakeTrigger], awakeProfiles: [AwakeSessionProfile], remoteControl: RemoteControlSettings, dockGroups: DockGroupsSettings, quickSearch: QuickSearchSettings) {
             version = ConfigurationSchema.currentVersion
             self.enabledFeatures = enabledFeatures.map(\.rawValue).sorted()
             self.rules = rules
@@ -2029,6 +2144,7 @@ final class MacPilotModel: ObservableObject {
             self.awakeProfiles = awakeProfiles
             self.remoteControl = remoteControl
             self.dockGroups = dockGroups
+            self.quickSearch = quickSearch
         }
 
         /// Not encoded: sections that existed on disk but could not be decoded
@@ -2070,6 +2186,7 @@ final class MacPilotModel: ObservableObject {
             awakeProfiles = Self.section([AwakeSessionProfile].self, forKey: .awakeProfiles, in: container, default: [], degraded: &degraded)
             remoteControl = Self.section(RemoteControlSettings.self, forKey: .remoteControl, in: container, default: RemoteControlSettings(), degraded: &degraded)
             dockGroups = Self.section(DockGroupsSettings.self, forKey: .dockGroups, in: container, default: DockGroupsSettings(), degraded: &degraded)
+            quickSearch = Self.section(QuickSearchSettings.self, forKey: .quickSearch, in: container, default: QuickSearchSettings(), degraded: &degraded)
             unreadableSections = degraded
         }
 
@@ -2123,6 +2240,7 @@ final class MacPilotModel: ObservableObject {
             try container.encode(awakeProfiles, forKey: .awakeProfiles)
             try container.encode(remoteControl, forKey: .remoteControl)
             try container.encode(dockGroups, forKey: .dockGroups)
+            try container.encode(quickSearch, forKey: .quickSearch)
         }
 
         /// 首页开关是功能唯一的开关，详情页不再保留自己的总开关（`docs/UI_DESIGN.md`）。
@@ -2147,6 +2265,7 @@ final class MacPilotModel: ObservableObject {
             if home.contains(.smoothScrolling) { aligned.smoothScrolling.isEnabled = true }
             if home.contains(.clipboard) { aligned.clipboard.isEnabled = true }
             if home.contains(.dockGroups) { aligned.dockGroups.isEnabled = true }
+            if home.contains(.quickSearch) { aligned.quickSearch.isEnabled = true }
 
             return aligned
         }
@@ -2182,7 +2301,7 @@ final class MacPilotModel: ObservableObject {
     /// True when macOS holds the registration but is waiting for the user to
     /// allow it in System Settings → General → Login Items & Extensions.
     @Published private(set) var loginItemNeedsApproval = false
-    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; screenRecording.language = language; windowSwitcher.language = language; clipboard.language = language; saveIfReady() } }
+    @Published var language: AppLanguage = .system { didSet { screenCapture.language = language; screenRecording.language = language; windowSwitcher.language = language; clipboard.language = language; quickSearch.language = language; saveIfReady() } }
     let ble = BLEUnlockModel()
     let updater = SoftwareUpdater()
     /// True while a version switch transaction owns the app: the settings UI
@@ -2255,6 +2374,9 @@ final class MacPilotModel: ObservableObject {
     let dockGroups = DockGroupsModel()
     /// Local Ports is deliberately idle until its page becomes visible.
     let localPorts = LocalPortsModel()
+    /// 快速搜索：应用启动 + 文件名搜索。构造只做对象分配——扫盘、建面板、
+    /// 起 Spotlight 全部推迟到 `start()`。
+    let quickSearch = QuickSearchModel()
     @Published var requestedSection: MainSection?
     /// Whether the main window holds its settings UI, and which page it opens
     /// on. False content is the normal state of a menu-bar app: the window
@@ -2490,6 +2612,13 @@ final class MacPilotModel: ObservableObject {
         windowSwitcher.persist = { [weak self] in self?.saveIfReady() }
         smoothScrolling.persist = { [weak self] in self?.saveIfReady() }
         clipboard.persist = { [weak self] in self?.saveIfReady() }
+        quickSearch.persist = { [weak self] in self?.saveIfReady() }
+        quickSearch.language = language
+        // 注册全局快捷键前先问一遍：这个组合是不是已经被 MacPilot 自己的另一个
+        // 功能占用了。Carbon 不会报告跨进程占用，所以应用内的冲突只能在这里查。
+        quickSearch.shortcutConflictChecker = { [weak self] binding in
+            self?.conflictingShortcutOwner(for: binding)
+        }
         awake.profileStore = awakeProfiles
         awake.persist = { [weak self] in self?.saveIfReady() }
         awakeTriggers.persist = { [weak self] in self?.saveIfReady() }
@@ -3315,6 +3444,7 @@ final class MacPilotModel: ObservableObject {
         awakeTriggers.applyLoadedTriggers(configuration.awakeTriggers, activate: false)
         remoteDeviceStore.applyLoadedSettings(configuration.remoteControl)
         dockGroups.applyLoadedSettings(configuration.dockGroups)
+        quickSearch.applyLoadedSettings(configuration.quickSearch, activate: false)
     }
 
     private func scheduleInputSourceSave() {
@@ -3357,7 +3487,8 @@ final class MacPilotModel: ObservableObject {
             awakeTriggers: awakeTriggers.triggers,
             awakeProfiles: awakeProfiles.profiles,
             remoteControl: remoteDeviceStore.settings,
-            dockGroups: dockGroups.settings
+            dockGroups: dockGroups.settings,
+            quickSearch: quickSearch.settings
         )
         let data: Data
         do {
@@ -3676,6 +3807,28 @@ extension MacPilotModel {
         mainContent.load()
     }
 
+    /// 这个组合是否已被 MacPilot 内另一个**已启用**的功能占用；返回占用者的标题键。
+    /// 只看已启用的功能：未启用的功能没有注册快捷键，报冲突就是误报。
+    func conflictingShortcutOwner(for binding: SmartCaptureShortcutBinding) -> String? {
+        if isFeatureEnabled(.capture),
+           ScreenCaptureShortcutKind.allCases.contains(where: { screenCapture.shortcutBinding(for: $0) == binding }) {
+            return MainSection.capture.titleKey
+        }
+        if isFeatureEnabled(.screenRecording), screenRecording.settings.shortcut == binding {
+            return MainSection.screenRecording.titleKey
+        }
+        if isFeatureEnabled(.clipboard), clipboard.settings.hotkey == binding {
+            return MainSection.clipboard.titleKey
+        }
+        if isFeatureEnabled(.inputSources), inputSources.settings.globalShortcutEnabled,
+           inputSources.settings.shortcuts.contains(where: {
+               $0.keyCode == binding.keyCode && $0.modifiers == binding.modifiers
+           }) {
+            return MainSection.inputSources.titleKey
+        }
+        return nil
+    }
+
     func setFeatureEnabled(_ enabled: Bool, for section: MainSection) {
         guard section.isFeature else { return }
         let wasEnabled = isFeatureEnabled(section)
@@ -3721,6 +3874,8 @@ extension MacPilotModel {
             clipboard.setEnabled(true)
         case .dockGroups:
             dockGroups.setEnabled(true)
+        case .quickSearch:
+            quickSearch.setEnabled(true)
         case .home, .exit, .launch, .compression, .rightClick, .memoryMonitor, .cpuMonitor, .localPorts, .settings:
             break
         }
@@ -3761,6 +3916,8 @@ extension MacPilotModel {
             featureLifecycle.start(rightClickFeature.identifier)
         case .dockGroups:
             featureLifecycle.start(dockGroups.identifier)
+        case .quickSearch:
+            if quickSearch.settings.isEnabled { featureLifecycle.start(quickSearch.identifier) }
         case .memoryMonitor, .cpuMonitor, .localPorts:
             break
         }
@@ -3801,6 +3958,8 @@ extension MacPilotModel {
             featureLifecycle.stop(rightClickFeature.identifier)
         case .dockGroups:
             featureLifecycle.stop(dockGroups.identifier)
+        case .quickSearch:
+            featureLifecycle.stop(quickSearch.identifier)
         case .memoryMonitor:
             featureLifecycle.stop("memoryMonitor")
             MemoryMonitorModel.clearMenuCache()
@@ -3818,7 +3977,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
     case home
     case exit, launch, awake, ble, remoteControl, inputSources, compression, capture, screenRecording
     case pictureInPicture, windowSwitcher, smoothScrolling, clipboard, rightClick
-    case dockGroups, memoryMonitor, cpuMonitor, localPorts, settings
+    case dockGroups, memoryMonitor, cpuMonitor, localPorts, quickSearch, settings
 
     var id: Self { self }
 
@@ -3843,6 +4002,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .memoryMonitor: "memoryMonitor"
         case .cpuMonitor: "cpuMonitor"
         case .localPorts: "localPorts"
+        case .quickSearch: "quickSearch"
         case .settings: "settings"
         }
     }
@@ -3868,6 +4028,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .memoryMonitor: "memorychip"
         case .cpuMonitor: "cpu"
         case .localPorts: "network"
+        case .quickSearch: "magnifyingglass.circle"
         case .settings: "gearshape"
         }
     }
@@ -3883,7 +4044,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
     static let utilitySections: [MainSection] = [
         .compression, .capture, .screenRecording, .pictureInPicture,
         .windowSwitcher, .smoothScrolling, .clipboard, .rightClick,
-        .memoryMonitor, .cpuMonitor, .localPorts, .dockGroups
+        .memoryMonitor, .cpuMonitor, .localPorts, .dockGroups, .quickSearch
     ]
 
     static var featureSections: [MainSection] {
@@ -3911,6 +4072,7 @@ enum MainSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .memoryMonitor: "memoryMonitorSubtitle"
         case .cpuMonitor: "cpuMonitorSubtitle"
         case .localPorts: "localPortsSubtitle"
+        case .quickSearch: "quickSearchSubtitle"
         }
     }
 }
@@ -4047,6 +4209,8 @@ struct ContentView: View {
             CPUMonitorView(monitor: model.cpuMonitor, lifecycle: model.featureLifecycle, language: model.language)
         case .localPorts:
             LocalPortsView(model: model.localPorts)
+        case .quickSearch:
+            QuickSearchSettingsView(quickSearch: model.quickSearch)
         case .settings:
             SettingsView()
         }
@@ -5655,6 +5819,10 @@ struct MenuBarView: View {
         if model.isFeatureEnabled(.clipboard) && clipboard.settings.isEnabled {
             Divider()
             Button(model.t("clipboardOpenNow")) { deferCaptureAction { clipboard.openPanel() } }
+        }
+        if model.isFeatureEnabled(.quickSearch) && model.quickSearch.settings.isEnabled {
+            Divider()
+            Button(model.t("quickSearchOpenNow")) { model.quickSearch.openPanel() }
         }
         if model.isFeatureEnabled(.capture) && model.screenCapture.settings.screenshotEnabled {
             Divider()
