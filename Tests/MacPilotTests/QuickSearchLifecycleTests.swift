@@ -1885,6 +1885,72 @@ struct QuickSearchPerformanceTests {
         #expect(harness.model.diagnosticObserverCount == 0)
         reportMeasurement("50 次开关后：发起 \(harness.fileQuery.starts.count) 次，终止 \(harness.fileQuery.cancelCount) 次，残留查询 0")
     }
+
+    /// 模块自身的驻留成本：真实进程的 RSS 与物理足迹读数，开启前后、100 次开关峰值、停止之后。
+    @Test func moduleMemoryFootprintStaysInsideItsBudget() async {
+        let idle = processMemory()
+        let harness = Harness()
+        await harness.enable(entries: syntheticIndex(count: 400))
+        let enabled = processMemory()
+
+        var peakRSS = enabled.rssMB
+        var peakFootprint = enabled.footprintMB
+        for _ in 0..<100 {
+            harness.model.openPanel()
+            harness.model.updateQuery("应用")
+            harness.clock.fireAll()
+            harness.model.closePanel()
+            let now = processMemory()
+            peakRSS = max(peakRSS, now.rssMB)
+            peakFootprint = max(peakFootprint, now.footprintMB)
+        }
+        harness.model.shutdown()
+        let stopped = processMemory()
+
+        reportMeasurement(String(format: """
+            内存｜开启前 RSS %.1f/足迹 %.1f MB → 开启后 RSS %.1f/足迹 %.1f MB → \
+            100 次开关峰值 RSS %.1f/足迹 %.1f MB → 停止后 RSS %.1f/足迹 %.1f MB
+            """, idle.rssMB, idle.footprintMB, enabled.rssMB, enabled.footprintMB,
+            peakRSS, peakFootprint, stopped.rssMB, stopped.footprintMB))
+        #expect(peakRSS - enabled.rssMB <= 32)
+        #expect(peakFootprint - enabled.footprintMB <= 32)
+    }
+}
+
+/// `task_info` 的两个读数：常驻集大小与 Activity Monitor 口径的物理足迹。
+struct ProcessMemory {
+    let rssMB: Double
+    let footprintMB: Double
+}
+
+private func processMemory() -> ProcessMemory {
+    var rss: UInt64 = 0
+    var footprint: UInt64 = 0
+
+    var basic = mach_task_basic_info()
+    var basicCount = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)
+        / UInt32(MemoryLayout<integer_t>.size)
+    withUnsafeMutablePointer(to: &basic) { raw in
+        _ = raw.withMemoryRebound(to: integer_t.self, capacity: Int(basicCount)) {
+            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &basicCount)
+        }
+    }
+    rss = UInt64(basic.resident_size)
+
+    var vm = task_vm_info()
+    var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info>.size)
+        / UInt32(MemoryLayout<integer_t>.size)
+    withUnsafeMutablePointer(to: &vm) { raw in
+        _ = raw.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
+        }
+    }
+    footprint = vm.phys_footprint
+
+    return ProcessMemory(
+        rssMB: Double(rss) / 1_048_576,
+        footprintMB: Double(footprint) / 1_048_576
+    )
 }
 
 
