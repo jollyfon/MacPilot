@@ -433,10 +433,7 @@ final class SoftwareUpdater: ObservableObject {
               FileManager.default.isWritableFile(atPath: applicationURL.deletingLastPathComponent().path) else {
             throw SoftwareUpdateError.installationUnavailable
         }
-        guard let bundledHelper = AppIdentity.updaterURLs(in: applicationURL)
-            .first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
-            throw SoftwareUpdateError.updaterHelperMissing
-        }
+        let bundledHelper = try installerHelperURL(for: package)
 
         let helperDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MacPilotUpdater-\(UUID().uuidString)", isDirectory: true)
@@ -470,6 +467,26 @@ final class SoftwareUpdater: ObservableObject {
             try? FileManager.default.removeItem(at: package.workingDirectory)
             throw error
         }
+    }
+
+    func installerHelperURL(for package: VerifiedUpdatePackage) throws -> URL {
+        guard let targetBundle = Bundle(url: package.applicationURL),
+              let targetVersion = SoftwareVersion(AppVersionInfo.current(bundle: targetBundle).version) else {
+            throw SoftwareUpdateError.invalidApplication
+        }
+        // The verified target carries installer fixes needed for this upgrade.
+        // Using the running app's helper would strand an installation whenever
+        // that older helper is the component preventing updates. On downgrades,
+        // keep the newer installed helper instead of reintroducing its bugs.
+        let installedVersion = Bundle(url: applicationURL)
+            .flatMap { SoftwareVersion(AppVersionInfo.current(bundle: $0).version) }
+        let helperApplication = installedVersion.map { $0 > targetVersion } == true
+            ? applicationURL : package.applicationURL
+        guard let helper = AppIdentity.updaterURLs(in: helperApplication)
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
+            throw SoftwareUpdateError.updaterHelperMissing
+        }
+        return helper
     }
 
     /// The updater helper polls for this process to exit and gives up after

@@ -127,18 +127,20 @@ private func refreshFinderSyncRegistration(
     let inventory = try runPlugInKit(
         arguments: FinderSyncRegistration.queryArguments(includeAllVersions: true)
     )
-    let commands = FinderSyncRegistration.registrationArguments(
-        for: applicationURL,
+    try FinderSyncRegistration.refreshRegistrations(
+        at: applicationURL,
         registeredExtensionPaths: FinderSyncRegistration.registeredExtensionPaths(in: inventory),
-        restoreEnabledElection: false
+        execute: { _ = try runPlugInKit(arguments: $0) },
+        query: { try runPlugInKit(arguments: $0) }
     )
-    for arguments in commands {
-        _ = try runPlugInKit(arguments: arguments)
-    }
     appendLog("FinderSync registration refreshed", to: logURL)
 }
 
 private func install(_ arguments: UpdaterArguments) throws {
+    appendLog(
+        "Update requested: source=\(arguments.sourceApplication.path) destination=\(arguments.destinationApplication.path)",
+        to: arguments.logURL
+    )
     try waitForParent(arguments.parentPID)
 
     let fileManager = FileManager.default
@@ -171,6 +173,7 @@ private func install(_ arguments: UpdaterArguments) throws {
                         backupItemName: backupName,
                         options: .withoutDeletingBackupItem
                     )
+                    appendLog("Application bundle replaced; refreshing FinderSync registration", to: arguments.logURL)
                     try refreshFinderSyncRegistration(
                         at: arguments.destinationApplication,
                         logURL: arguments.logURL

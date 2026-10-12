@@ -280,6 +280,47 @@ public enum FinderSyncRegistration {
         return arguments
     }
 
+    /// Runs the same registration refresh for the installer and recovery paths.
+    /// Callers own the surrounding election transaction and its journal lock.
+    public static func refreshRegistrations(
+        at applicationURL: URL,
+        registeredExtensionPaths: [String],
+        execute: ([String]) throws -> Void,
+        query: ([String]) throws -> String
+    ) throws {
+        for arguments in registrationArguments(
+            for: applicationURL,
+            registeredExtensionPaths: registeredExtensionPaths,
+            restoreEnabledElection: false
+        ) {
+            try Task<Never, Never>.checkCancellation()
+            do {
+                try execute(arguments)
+            } catch {
+                // Replacing the bundle can make PlugInKit retire a registration
+                // between the inventory query and removal. Treat only that
+                // exact missing-path result as idempotent, and verify it with
+                // a fresh inventory before proceeding to add the new bundle.
+                guard arguments.count == 2, arguments[0] == "-r",
+                      isMissingRegistration(error, at: arguments[1]) else { throw error }
+                let removalError = error
+                try Task<Never, Never>.checkCancellation()
+                let inventory = try query(queryArguments(includeAllVersions: true))
+                guard !Self.registeredExtensionPaths(in: inventory).contains(arguments[1]) else {
+                    throw removalError
+                }
+            }
+        }
+    }
+
+    private static func isMissingRegistration(_ error: Error, at path: String) -> Bool {
+        let error = error as NSError
+        guard ["MacPilotUpdater.PlugInKit", "MacPilot.FinderSyncRegistration", "PlugInKit"]
+            .contains(error.domain), error.code == 1 else { return false }
+        return error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            == "remove: no plugin at \(path)"
+    }
+
     private static func exactBundleToken(in line: String) -> Bool {
         var tokens = line.split(whereSeparator: \.isWhitespace)
         if tokens.first?.hasPrefix("+") == true { tokens.removeFirst() }
@@ -320,14 +361,12 @@ public enum FinderSyncRegistration {
 
         var operationError: Error?
         do {
-            for arguments in registrationArguments(
-                for: applicationURL,
+            try refreshRegistrations(
+                at: applicationURL,
                 registeredExtensionPaths: registeredExtensionPaths(in: inventory),
-                restoreEnabledElection: false
-            ) {
-                try Task<Never, Never>.checkCancellation()
-                try execute(arguments)
-            }
+                execute: execute,
+                query: query
+            )
         } catch {
             operationError = error
         }
@@ -396,14 +435,12 @@ public enum FinderSyncRegistration {
 
         var operationError: Error?
         do {
-            for arguments in registrationArguments(
-                for: applicationURL,
+            try refreshRegistrations(
+                at: applicationURL,
                 registeredExtensionPaths: registeredExtensionPaths,
-                restoreEnabledElection: false
-            ) {
-                try Task<Never, Never>.checkCancellation()
-                _ = try execute(arguments)
-            }
+                execute: { _ = try execute($0) },
+                query: execute
+            )
         } catch {
             operationError = error
         }

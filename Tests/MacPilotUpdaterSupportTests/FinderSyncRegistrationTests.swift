@@ -41,6 +41,104 @@ struct UpdaterLaunchPlanTests {
 }
 
 struct FinderSyncRegistrationTests {
+    @Test func recoveryContinuesAfterPlugInKitConfirmsFailedRemovalAlreadyRemovedTheExactTarget() throws {
+        try withTemporaryJournal { journal in
+            let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
+            let targetPath = app.appendingPathComponent("Contents/PlugIns/FinderSync.appex").path
+            let attempt = try attemptRemovalRecovery(
+                journal: journal,
+                applicationURL: app,
+                removalError: NSError(
+                    domain: "PlugInKit",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "remove: no plugin at \(targetPath)"]
+                ),
+                targetDisappearsAfterRemoval: true
+            )
+
+            if case .success(let recovered) = attempt.result {
+                #expect(recovered)
+            } else if case .failure(let error) = attempt.result {
+                Issue.record("A vanished exact target should be re-added: \(error)")
+            }
+            #expect(attempt.commands == [
+                FinderSyncRegistration.queryArguments(),
+                FinderSyncRegistration.queryArguments(includeAllVersions: true),
+                ["-e", "ignore", "-i", FinderSyncRegistration.extensionBundleIdentifier],
+                ["-r", targetPath],
+                FinderSyncRegistration.queryArguments(includeAllVersions: true),
+                ["-a", targetPath],
+                ["-e", "use", "-i", FinderSyncRegistration.extensionBundleIdentifier],
+                FinderSyncRegistration.queryArguments()
+            ])
+            #expect(!attempt.journalHasIntent)
+        }
+    }
+
+    @Test func missingPluginRemovalErrorIsNotIgnoredWhileTheExactTargetRemainsRegistered() throws {
+        try assertRemovalRecoveryFailure(
+            removalMessage: "remove: no plugin at /Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex",
+            removalDomain: "PlugInKit",
+            targetDisappearsAfterRemoval: false
+        )
+    }
+
+    @Test func permissionRemovalErrorIsNotIgnoredEvenWhenTheTargetDisappears() throws {
+        try assertRemovalRecoveryFailure(
+            removalMessage: "not authorized to remove extension",
+            removalDomain: "PlugInKit",
+            targetDisappearsAfterRemoval: true
+        )
+    }
+
+    @Test func missingPluginErrorForAnotherPathIsNotIgnored() throws {
+        try assertRemovalRecoveryFailure(
+            removalMessage: "remove: no plugin at /Users/other/MacPilot.app/Contents/PlugIns/FinderSync.appex",
+            removalDomain: "PlugInKit",
+            targetDisappearsAfterRemoval: true
+        )
+    }
+
+    @Test func matchingMissingPluginMessageFromAnotherDomainIsNotIgnored() throws {
+        try assertRemovalRecoveryFailure(
+            removalMessage: "remove: no plugin at /Applications/MacPilot.app/Contents/PlugIns/FinderSync.appex",
+            removalDomain: "UnrelatedCommandRunner",
+            targetDisappearsAfterRemoval: true
+        )
+    }
+
+    @Test func addFailureAfterConfirmedRemovalRetainsRecoveryIntent() throws {
+        try withTemporaryJournal { journal in
+            let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
+            let attempt = try attemptRemovalRecovery(
+                journal: journal,
+                applicationURL: app,
+                removalError: missingPluginError(at: app),
+                targetDisappearsAfterRemoval: true,
+                addError: NSError(domain: "PlugInKit", code: 2, userInfo: [NSLocalizedDescriptionKey: "add failed"])
+            )
+
+            expectFailure(attempt.result, domain: "PlugInKit", message: "add failed")
+            #expect(attempt.journalHasIntent)
+        }
+    }
+
+    @Test func electionFailureAfterConfirmedRemovalRetainsRecoveryIntent() throws {
+        try withTemporaryJournal { journal in
+            let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
+            let attempt = try attemptRemovalRecovery(
+                journal: journal,
+                applicationURL: app,
+                removalError: missingPluginError(at: app),
+                targetDisappearsAfterRemoval: true,
+                useError: NSError(domain: "PlugInKit", code: 3, userInfo: [NSLocalizedDescriptionKey: "use election failed"])
+            )
+
+            expectFailure(attempt.result, domain: "PlugInKit", message: "use election failed")
+            #expect(attempt.journalHasIntent)
+        }
+    }
+
     @Test func enabledExtensionIsPausedBeforeReplacementAndResumedAfterRegistration() throws {
         try withTemporaryJournal { journal in
             var elected = true
@@ -417,4 +515,109 @@ private func finderSyncOutput(enabled: Bool, at applicationURL: URL) -> String {
         .appendingPathComponent("Contents/PlugIns/FinderSync.appex")
         .path
     return "\(status)\tcom.misswell.macpilot.finder-sync(1.1.501)\tTEST-UUID\t\(extensionPath)"
+}
+
+private struct RemovalRecoveryAttempt {
+    let result: Result<Bool, any Error>
+    let commands: [[String]]
+    let journalHasIntent: Bool
+}
+
+private func attemptRemovalRecovery(
+    journal: FinderSyncRecoveryJournal,
+    applicationURL: URL,
+    removalError: Error,
+    targetDisappearsAfterRemoval: Bool,
+    addError: Error? = nil,
+    useError: Error? = nil
+) throws -> RemovalRecoveryAttempt {
+    var commands: [[String]] = []
+    var targetRegistered = true
+    var elected = true
+
+    let result: Result<Bool, any Error>
+    do {
+        result = .success(try FinderSyncRegistration.recoverIfEnabled(at: applicationURL, journal: journal) { arguments in
+            commands.append(arguments)
+            if arguments == FinderSyncRegistration.queryArguments() {
+                return targetRegistered ? finderSyncOutput(enabled: elected, at: applicationURL) : ""
+            }
+            if arguments == FinderSyncRegistration.queryArguments(includeAllVersions: true) {
+                return targetRegistered ? finderSyncOutput(enabled: elected, at: applicationURL) : ""
+            }
+            if arguments == ["-e", "ignore", "-i", FinderSyncRegistration.extensionBundleIdentifier] {
+                elected = false
+                return ""
+            }
+            if arguments.first == "-r" {
+                targetRegistered = !targetDisappearsAfterRemoval
+                throw removalError
+            }
+            if arguments.first == "-a" {
+                if let addError { throw addError }
+                targetRegistered = true
+                return ""
+            }
+            if arguments == ["-e", "use", "-i", FinderSyncRegistration.extensionBundleIdentifier] {
+                if let useError { throw useError }
+                elected = true
+                return ""
+            }
+            return ""
+        })
+    } catch {
+        result = .failure(error)
+    }
+
+    let journalHasIntent = try journal.withExclusiveLock { try $0.readIntent() != nil }
+    return RemovalRecoveryAttempt(result: result, commands: commands, journalHasIntent: journalHasIntent)
+}
+
+private func missingPluginError(at applicationURL: URL) -> NSError {
+    let path = applicationURL.appendingPathComponent("Contents/PlugIns/FinderSync.appex").path
+    return NSError(
+        domain: "PlugInKit",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "remove: no plugin at \(path)"]
+    )
+}
+
+private func assertRemovalRecoveryFailure(
+    removalMessage: String,
+    removalDomain: String,
+    targetDisappearsAfterRemoval: Bool
+) throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("FinderSyncRemovalRecoveryTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let journal = FinderSyncRecoveryJournal(fileURL: directory.appendingPathComponent("journal.json"))
+    let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
+    let attempt = try attemptRemovalRecovery(
+        journal: journal,
+        applicationURL: app,
+        removalError: NSError(
+            domain: removalDomain,
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: removalMessage]
+        ),
+        targetDisappearsAfterRemoval: targetDisappearsAfterRemoval
+    )
+
+    expectFailure(attempt.result, domain: removalDomain, message: removalMessage)
+    #expect(attempt.journalHasIntent == targetDisappearsAfterRemoval)
+}
+
+private func expectFailure(
+    _ result: Result<Bool, any Error>,
+    domain: String,
+    message: String
+) {
+    guard case .failure(let error) = result else {
+        Issue.record("Expected registration failure: \(message)")
+        return
+    }
+    let cocoaError = error as NSError
+    #expect(cocoaError.domain == domain)
+    #expect(cocoaError.localizedDescription == message)
 }
