@@ -15,6 +15,7 @@ set -euo pipefail
 #   MACPILOT_TEAM_ID                Team ID
 
 ROOT="${0:A:h:h}"
+source "$ROOT/Scripts/stapler-retry.sh"
 cd "$ROOT"
 
 ARCHS=(${=MACPILOT_ARCHS:-arm64 x86_64})
@@ -103,8 +104,8 @@ echo "==> Submitting to Apple notarization service"
 xcrun notarytool submit "$ZIP" "${NOTARY_ARGS[@]}" --wait
 
 echo "==> Stapling the notarization ticket"
-xcrun stapler staple "$APP"
-xcrun stapler validate "$APP"
+macpilot_stapler staple "$APP"
+macpilot_stapler validate "$APP"
 
 echo "==> Re-archiving the stapled app"
 rm -f "$ZIP"

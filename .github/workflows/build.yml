@@ -51,7 +51,10 @@ jobs:
           echo "Building MacPilot $version ($build_number)"
 
       - name: Run tests
-        run: swift test --filter 'UpdateChannelTests|SoftwareUpdateTests|SigningRequirementTests|ScreenRecordingTests|Awake|ClosedLid|SleepDisabledPlannerTests|BLEIdentity|ConfigurationSchemaContractTests|BLEUnlockPerformanceTests|BLEAdvertisementLivenessTests|RemoteBLEBackoffTests|ScreenControlSafetyTests|RemoteNavigationControlTests|Clipboard|SecondarySelectionRegressionTests|RemoteControlAppStoreInfoTests'
+        run: swift test --filter 'MonitorMenu|UpdateChannelTests|SoftwareUpdateTests|SigningRequirementTests|ScreenRecordingTests|Awake|ClosedLid|SleepDisabledPlannerTests|BLEIdentity|ConfigurationSchemaContractTests|BLEUnlockPerformanceTests|BLEAdvertisementLivenessTests|RemoteBLEBackoffTests|ScreenControlSafetyTests|RemoteNavigationControlTests|Clipboard|SecondarySelectionRegressionTests|RemoteControlAppStoreInfoTests'
+
+      - name: Verify notarization ticket retry behavior
+        run: python3 Tests/Release/stapler-retry-tests.py
 
       - name: Package app bundle
         env:
