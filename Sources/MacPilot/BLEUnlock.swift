@@ -444,8 +444,15 @@ enum BLEActiveConnectionPolicy {
         !wakeOnProximity && (displayAsleep || systemAsleep)
     }
 
-    static func shouldPauseForUserInactivity(wakeOnProximity: Bool, userIsActive: Bool) -> Bool {
-        !wakeOnProximity && !userIsActive
+    static func shouldPauseForUserInactivity(
+        wakeOnProximity: Bool,
+        userIsActive: Bool,
+        proximityLockEnabled: Bool = false
+    ) -> Bool {
+        // Proximity lock needs ongoing RSSI even while the user is reading or
+        // watching without touching the keyboard. Deliberately closing that
+        // link makes its own signal timeout look like the phone has left.
+        !wakeOnProximity && !userIsActive && !proximityLockEnabled
     }
 }
 

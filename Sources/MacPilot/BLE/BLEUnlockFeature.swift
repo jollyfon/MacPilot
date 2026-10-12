@@ -43,14 +43,17 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     let screenControl = MacScreenControlService()
 
     private let userActivityMonitor: BLEUserActivityMonitor
+    private let eventScriptRunner: (@MainActor (String) -> Void)?
     private var userActivityPolicyTimer: BackgroundTask?
 
     init(
         userActivityMonitor: BLEUserActivityMonitor = BLEUserActivityMonitor(),
-        bluetoothScanner: any BluetoothScanning = BluetoothScanner()
+        bluetoothScanner: any BluetoothScanning = BluetoothScanner(),
+        eventScriptRunner: (@MainActor (String) -> Void)? = nil
     ) {
         self.userActivityMonitor = userActivityMonitor
         self.bluetoothScanner = bluetoothScanner
+        self.eventScriptRunner = eventScriptRunner
         super.init()
         screenControl.willLock = { [weak self] source in
             guard let self else { return }
@@ -149,7 +152,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             wakeOnProximity: settings.wakeOnProximity
         ) || BLEActiveConnectionPolicy.shouldPauseForUserInactivity(
             wakeOnProximity: settings.wakeOnProximity,
-            userIsActive: userActivityMonitor.isUserActive(at: userActivityMonitor.now)
+            userIsActive: userActivityMonitor.isUserActive(at: userActivityMonitor.now),
+            proximityLockEnabled: settings.lockRSSI != Self.lockDisabled
         )
     }
 
@@ -157,7 +161,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         if !settings.wakeOnProximity, displayUnavailable || systemSleep { return "displayUnavailable" }
         if BLEActiveConnectionPolicy.shouldPauseForUserInactivity(
             wakeOnProximity: settings.wakeOnProximity,
-            userIsActive: userActivityMonitor.isUserActive(at: userActivityMonitor.now)
+            userIsActive: userActivityMonitor.isUserActive(at: userActivityMonitor.now),
+            proximityLockEnabled: settings.lockRSSI != Self.lockDisabled
         ) { return "userInputIdle" }
         return "none"
     }
@@ -452,7 +457,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         screenControl.shutdown()
     }
 
-    func setLockRSSI(_ value: Int) { log("setLockRSSI from=\(settings.lockRSSI) to=\(value)"); settings.lockRSSI = value; notifyChange() }
+    func setLockRSSI(_ value: Int) {
+        log("setLockRSSI from=\(settings.lockRSSI) to=\(value)")
+        settings.lockRSSI = value
+        reconcileActiveConnectionPolicy(reason: "lockThresholdChanged")
+        notifyChange()
+    }
     func setUnlockRSSI(_ value: Int) { log("setUnlockRSSI from=\(settings.unlockRSSI) to=\(value)"); settings.unlockRSSI = value; notifyChange() }
     func setProximityTimeout(_ value: Int) { log("setProximityTimeout from=\(settings.proximityTimeout) to=\(value)"); settings.proximityTimeout = value; notifyChange() }
     func setSignalTimeout(_ value: Int) { log("setSignalTimeout from=\(settings.signalTimeout) to=\(value)"); settings.signalTimeout = value; notifyChange() }
@@ -745,8 +755,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         let isActive = userActivityMonitor.isUserActive(at: userActivityMonitor.now)
         let pauseReason = BLEActiveConnectionPolicy.shouldPauseForUserInactivity(
             wakeOnProximity: settings.wakeOnProximity,
-            userIsActive: isActive
-        ) ? "userInputIdle" : "userInputActive"
+            userIsActive: isActive,
+            proximityLockEnabled: settings.lockRSSI != Self.lockDisabled
+        ) ? "userInputIdle" : (isActive ? "userInputActive" : "proximityMonitoring")
         reconcileActiveConnectionPolicy(reason: pauseReason)
     }
 
@@ -1327,7 +1338,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         return age
     }
 
-    private func confirmAutomaticUnlock(source: String, eventDate: Date = Date()) {
+    func noteAutomaticUnlockRequest(at time: TimeInterval) {
+        lastUnlockRequestAt = time
+        lastAutomaticUnlockRequestAt = time
+    }
+
+    func confirmAutomaticUnlock(source: String, eventDate: Date = Date()) {
         let now = Date().timeIntervalSince1970
         let state = screenLockState()
         guard BLEUnlockConfirmation.isConfirmed(screenState: state) else {
@@ -1337,24 +1353,34 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         unlockSignalTrigger.reset()
 
         let requestAge = lastUnlockRequestAt > 0 ? now - lastUnlockRequestAt : nil
-        if now - lastAutomaticUnlockConfirmationAt < 2 {
-            log("unlock confirmation already handled source=\(source) requestAge=\(formattedUnlockAge(requestAge))")
+        let automaticRequestAge = recentAutomaticUnlockRequestAge(at: eventDate)
+        let hasOpenSession = settings.screenLockHistory.entries.contains(where: \.isStillLocked)
+        guard automaticRequestAge != nil || hasOpenSession else {
+            // A wake retry can find an already unlocked desktop. Without a
+            // command or an open session there is no new unlock to attribute,
+            // no event script to run and no notification to suppress later.
+            log("unlock completion skipped source=\(source) reason=noPendingRequestOrSession")
             lastUnlockRequestAt = 0
             lastAutomaticUnlockRequestAt = 0
             manualLock = false
             return
         }
 
+        let historySource: ScreenLockHistorySource = automaticRequestAge == nil ? .manual : .automatic
         lastAutomaticUnlockConfirmationAt = now
-        log("screen unlock confirmed source=\(source) screenState=unlocked requestAge=\(formattedUnlockAge(requestAge))")
-        if recentAutomaticUnlockRequestAge(at: eventDate) != nil {
-            recordScreenUnlock(at: eventDate, source: .automatic)
-        }
+        log("screen unlock confirmed source=\(source) screenState=unlocked requestAge=\(formattedUnlockAge(requestAge)) historySource=\(historySource.rawValue)")
+        // Complete history now: the delayed distributed notification may
+        // arrive after this state probe and be de-duplicated.
+        recordScreenUnlock(at: eventDate, source: historySource)
         lastUnlockRequestAt = 0
         lastAutomaticUnlockRequestAt = 0
         manualLock = false
         playNowPlaying()
-        runScript("unlocked")
+        if historySource == .automatic {
+            runScript("unlocked")
+        } else if settings.unlockRSSI != Self.unlockDisabled {
+            runScript("intruded")
+        }
     }
 
     private func scheduleUnlockAttempt(trigger: String) {
@@ -1435,8 +1461,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                         return
                     }
                     let requestTimestamp = Date().timeIntervalSince1970
-                    self.lastUnlockRequestAt = requestTimestamp
-                    self.lastAutomaticUnlockRequestAt = requestTimestamp
+                    self.noteAutomaticUnlockRequest(at: requestTimestamp)
                     self.log("posting unlock key events deadline=\(attemptDeadline) screenState=locked accessibilityTrusted=\(AXIsProcessTrusted())")
                     guard self.settings.wakeOnProximity || !self.displayUnavailable else {
                         self.lastUnlockRequestAt = 0
@@ -1563,6 +1588,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     // MARK: Event script
 
     func runScript(_ arg: String) {
+        if let eventScriptRunner {
+            eventScriptRunner(arg)
+            return
+        }
         let scriptsDirectory = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Scripts")
         var bundleIdentifiers = [Bundle.main.bundleIdentifier ?? AppIdentity.bundleIdentifier]
@@ -1996,7 +2025,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                         return
                     }
 
-                    if let confirmationAge, confirmationAge >= 0, confirmationAge < 5 {
+                    if let confirmationAge, confirmationAge >= 0, confirmationAge < 5,
+                       !self.settings.screenLockHistory.entries.contains(where: \.isStillLocked) {
                         self.log("screen unlock notification already handled reason=recentConfirmation")
                         self.manualLock = false
                         return

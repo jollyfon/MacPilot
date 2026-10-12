@@ -6,6 +6,62 @@ import Testing
 
 @MainActor
 struct BLEMonitoringRestorationTests {
+    @Test func anIdleUserMustNotPauseMonitoringNeededForProximityLock() {
+        var now: TimeInterval = 100
+        let activity = BLEUserActivityMonitor(uptime: { now }, observesEvents: false)
+        let model = BLEUnlockModel(userActivityMonitor: activity, bluetoothScanner: RecordingBluetoothScanner())
+        defer { model.shutdown() }
+        model.displayUnavailableProbe = { false }
+        // Even a broken presence path can never lock or type into the real screen.
+        model.screenLockStateProbe = { .locked }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = -80
+        model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+        model.startObservingSystemState()
+        let phone = UUID()
+        model.startMonitor(phone)
+        model.updateMonitoredPeripheral(-50, for: phone)
+
+        now = 131
+        model.evaluateUserActivityPolicy()
+
+        #expect(!model.activeConnectionsPaused, "No keyboard input cannot stop the connection that determines whether the phone has left")
+        #expect(model.presence)
+        // A genuinely silent phone must still become absent; do not fix this
+        // by indefinitely trusting the previous close sample.
+        model.handleMonitoredSignalTimeout(for: phone)
+        #expect(!model.presence)
+    }
+
+    @Test func enablingProximityLockWhileIdleResumesMonitoringButCannotWakeABlankedDisplay() {
+        var now: TimeInterval = 100
+        var isBlanked = false
+        let activity = BLEUserActivityMonitor(uptime: { now }, observesEvents: false)
+        let model = BLEUnlockModel(userActivityMonitor: activity, bluetoothScanner: RecordingBluetoothScanner())
+        defer { model.shutdown() }
+        model.displayUnavailableProbe = { isBlanked }
+        model.screenLockStateProbe = { .locked }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+        model.startObservingSystemState()
+        model.startMonitor(UUID())
+        now = 131
+        model.evaluateUserActivityPolicy()
+        #expect(model.activeConnectionsPaused)
+
+        model.setLockRSSI(-80)
+        #expect(!model.activeConnectionsPaused)
+        isBlanked = true
+        model.evaluateUserActivityPolicy()
+        #expect(model.activeConnectionsPaused, "Keeping proximity monitoring must still respect display sleep without proximity wake")
+        isBlanked = false
+        model.evaluateUserActivityPolicy()
+        #expect(!model.activeConnectionsPaused)
+        model.setLockRSSI(BLEUnlockModel.lockDisabled)
+        #expect(model.activeConnectionsPaused, "Unlock-only mode retains its finite activity policy")
+    }
+
     @Test func aWakeNotificationCannotAuthorizeUnlockBeforeAnyPhoneSignal() {
         let model = BLEUnlockModel(
             userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
@@ -462,6 +518,7 @@ struct BLEMonitoringRestorationTests {
         model.displayUnavailableProbe = { false }
         model.screenLockStateProbe = { .unlocked }
         model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
         model.startObservingSystemState()
 
         now = 131
