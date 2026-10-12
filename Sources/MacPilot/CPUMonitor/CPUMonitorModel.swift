@@ -10,7 +10,10 @@ final class CPUMonitorModel: ManagedFeature, FeatureResourceReporting {
     static let refreshInterval: TimeInterval = 3
 
     private static let menuSampler = CPUUsageSampler()
-    private static var cachedMenuSample: (date: Date, apps: [AppCPUUsage], system: SystemCPUSnapshot?)?
+    private static let menuCache = MonitorMenuSnapshotCache {
+        let result = menuSampler.sample()
+        return (apps: result.apps, system: result.system)
+    }
 
     let store = CPUStore()
 
@@ -19,16 +22,13 @@ final class CPUMonitorModel: ManagedFeature, FeatureResourceReporting {
     private var samplingTask: Task<Void, Never>?
     private var sampleRevision = 0
 
-    static func menuSnapshot(maxAge: TimeInterval = 2) -> (
+    /// Warm the first native menu construction, then expire snapshots only
+    /// while menu tracking permits another process scan.
+    static func menuSnapshot(maxAge: TimeInterval = 2, allowsRefresh: Bool = true) -> (
         apps: [AppCPUUsage],
         system: SystemCPUSnapshot?
     ) {
-        if let cached = cachedMenuSample, Date().timeIntervalSince(cached.date) < maxAge {
-            return (cached.apps, cached.system)
-        }
-        let result = menuSampler.sample()
-        cachedMenuSample = (Date(), result.apps, result.system)
-        return (result.apps, result.system)
+        menuCache.snapshot(maxAge: maxAge, allowsRefresh: allowsRefresh)
     }
 
     func startAutoRefresh() {
@@ -54,7 +54,7 @@ final class CPUMonitorModel: ManagedFeature, FeatureResourceReporting {
     func stop() { stopAutoRefresh() }
 
     static func clearMenuCache() {
-        cachedMenuSample = nil
+        menuCache.clear()
         menuSampler.reset()
     }
 

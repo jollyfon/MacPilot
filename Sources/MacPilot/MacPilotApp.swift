@@ -5658,15 +5658,16 @@ struct BLEUnlockView: View {
 }
 
 /// 菜单栏「内存监控」子菜单：系统内存总览 + 占用前十的应用。
-/// 每次展开菜单时同步采样（带短缓存），底部入口跳转到监控页。
+/// 菜单跟踪期间按短缓存采样，底部入口跳转到监控页。
 struct MemoryMonitorMenuSection: View {
     @EnvironmentObject private var model: MacPilotModel
+    @ObservedObject private var menuActivity = MonitorMenuActivity.shared
     let openMonitor: () -> Void
 
-    // Native menu construction must have rows before appearance callbacks.
-    // The two-second cache coalesces repeated SwiftUI evaluations.
+    // Warm rows before appearance callbacks, then refresh only while the
+    // native menu is tracking. Hidden SwiftUI reevaluation reads the cache.
     var snapshot: (apps: [AppMemoryUsage], system: SystemMemorySnapshot?) {
-        MemoryMonitorModel.menuSnapshot()
+        MemoryMonitorModel.menuSnapshot(allowsRefresh: menuActivity.isTracking)
     }
 
     var body: some View {
@@ -5708,15 +5709,16 @@ struct MemoryMonitorMenuSection: View {
 }
 
 /// 菜单栏「CPU 监控」子菜单：系统 CPU 总览 + 占用前十的应用。
-/// 每次展开菜单时同步采样（带短缓存），底部入口跳转到监控页。
+/// 菜单跟踪期间按短缓存采样，底部入口跳转到监控页。
 struct CPUMonitorMenuSection: View {
     @EnvironmentObject private var model: MacPilotModel
+    @ObservedObject private var menuActivity = MonitorMenuActivity.shared
     let openMonitor: () -> Void
 
-    // Native menu construction must have rows before appearance callbacks.
-    // The two-second cache coalesces repeated SwiftUI evaluations.
+    // Warm rows before appearance callbacks, then refresh only while the
+    // native menu is tracking. Hidden SwiftUI reevaluation reads the cache.
     var snapshot: (apps: [AppCPUUsage], system: SystemCPUSnapshot?) {
-        CPUMonitorModel.menuSnapshot()
+        CPUMonitorModel.menuSnapshot(allowsRefresh: menuActivity.isTracking)
     }
 
     var body: some View {

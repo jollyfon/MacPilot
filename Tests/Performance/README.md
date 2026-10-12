@@ -28,6 +28,17 @@ Activity Monitor or Instruments for GPU and allocations; `ps` cannot measure
 those. Always note hardware, macOS version, enabled features, and the exact
 build SHA alongside results.
 
+## Monitor menu sampling
+
+`swift test --filter MonitorMenu` checks that native menus have initial rows
+before appearance callbacks, hidden evaluations reuse expired snapshots, and
+menu tracking allows refresh after the cache lifetime. The regression budget
+is one initial sample across 100 expired evaluations while the menu is closed.
+
+This counts redundant work, not CPU percentage. Measure the actual release
+process separately with the same feature switches and window state to assess
+the CPU improvement.
+
 ## Phase 2 acceptance
 
 Use the **new release process**. Record the SHA, macOS version, hardware, PID,

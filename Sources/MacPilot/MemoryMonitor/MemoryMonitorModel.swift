@@ -10,8 +10,11 @@ final class MemoryMonitorModel: ManagedFeature, FeatureResourceReporting {
     /// 自动刷新间隔：足够跟随变化，又不会带来可感知的开销。
     static let refreshInterval: TimeInterval = 3
 
-    /// 菜单栏缓存的采样有效期：菜单开合触发的多次求值共享同一次采样。
-    private static var cachedMenuSample: (date: Date, apps: [AppMemoryUsage], system: SystemMemorySnapshot?)?
+    /// 菜单关闭时复用快照；实际跟踪菜单时才按短缓存刷新。
+    private static let menuCache = MonitorMenuSnapshotCache {
+        let samples = ProcessMemorySampler.sample()
+        return (apps: AppMemoryGrouper.group(samples), system: SystemMemoryReader.snapshot())
+    }
 
     let store = MemoryStore()
 
@@ -19,17 +22,10 @@ final class MemoryMonitorModel: ManagedFeature, FeatureResourceReporting {
     private var samplingTask: Task<Void, Never>?
     private var sampleRevision = 0
 
-    /// 菜单栏「内存监控」子菜单使用：同步采样一次（毫秒级），
-    /// 短时间内重复调用（如菜单反复开合）共享缓存结果。
-    static func menuSnapshot(maxAge: TimeInterval = 2) -> (apps: [AppMemoryUsage], system: SystemMemorySnapshot?) {
-        if let cached = cachedMenuSample, Date().timeIntervalSince(cached.date) < maxAge {
-            return (cached.apps, cached.system)
-        }
-        let samples = ProcessMemorySampler.sample()
-        let system = SystemMemoryReader.snapshot()
-        let apps = AppMemoryGrouper.group(samples)
-        cachedMenuSample = (Date(), apps, system)
-        return (apps, system)
+    /// Native menu construction gets initial rows immediately. Hidden
+    /// evaluations reuse them; an open menu can refresh after the TTL.
+    static func menuSnapshot(maxAge: TimeInterval = 2, allowsRefresh: Bool = true) -> (apps: [AppMemoryUsage], system: SystemMemorySnapshot?) {
+        menuCache.snapshot(maxAge: maxAge, allowsRefresh: allowsRefresh)
     }
 
     func startAutoRefresh() {
@@ -55,7 +51,7 @@ final class MemoryMonitorModel: ManagedFeature, FeatureResourceReporting {
     /// Drops the process-wide menu snapshot so a terminated app does not keep
     /// the cached `[AppMemoryUsage]` array alive.
     static func clearMenuCache() {
-        cachedMenuSample = nil
+        menuCache.clear()
     }
 
     func refresh() {
