@@ -64,7 +64,6 @@ final class SidecarCoreRuntime: SidecarCoreBridge {
 
     private var managerClass: NSObject.Type?
     private var manager: NSObject?
-    private var supported = false
     private var didAttemptLoad = false
     private let log: (String) -> Void
 
@@ -72,13 +71,19 @@ final class SidecarCoreRuntime: SidecarCoreBridge {
         self.log = log
     }
 
+    /// Asked again on every read instead of cached at load. The framework
+    /// answers for *right now*: at listener startup, before SidecarCore's own
+    /// state has settled, it can say no on a Mac that says yes a minute later,
+    /// and a latched no would then hide the Sidecar entry from every phone for
+    /// the rest of the process. Only the `dlopen` is one-shot.
     var isSupported: Bool {
         loadIfNeeded()
-        return supported
+        guard let managerClass else { return false }
+        return Self.invokeIsSupported(managerClass)
     }
 
     func currentState() -> SidecarBridgeState {
-        guard supported, let manager = sharedManager() else { return .unsupported }
+        guard isSupported, let manager = sharedManager() else { return .unsupported }
         return SidecarBridgeState(
             isSupported: true,
             devices: Self.readDevices(from: manager, key: "devices"),
@@ -108,8 +113,7 @@ final class SidecarCoreRuntime: SidecarCoreBridge {
             return
         }
         self.managerClass = managerClass
-        supported = Self.invokeIsSupported(managerClass)
-        log("sidecar loaded supported=\(supported)")
+        log("sidecar loaded")
     }
 
     /// The singleton is resolved on the first device question, not on the
@@ -117,7 +121,7 @@ final class SidecarCoreRuntime: SidecarCoreBridge {
     /// and merely advertising `sidecar` in a Bonjour record must not cost that.
     private func sharedManager() -> NSObject? {
         loadIfNeeded()
-        guard supported, let managerClass else { return nil }
+        guard isSupported, let managerClass else { return nil }
         if let manager { return manager }
         let shared = Self.invokeSharedManager(managerClass)
         manager = shared
@@ -186,7 +190,7 @@ final class SidecarCoreRuntime: SidecarCoreBridge {
     ) -> Void
 
     private func invoke(_ selectorName: String, deviceID: String) async -> SidecarBridgeError? {
-        guard supported, let manager = sharedManager() else { return .unsupported }
+        guard isSupported, let manager = sharedManager() else { return .unsupported }
         guard let device = deviceObject(matching: deviceID, from: manager) else { return .deviceMissing }
         let selector = NSSelectorFromString(selectorName)
         guard let method = class_getInstanceMethod(type(of: manager), selector) else { return .unsupported }

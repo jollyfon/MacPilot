@@ -142,6 +142,19 @@ struct SidecarServiceTests {
         #expect(bridge.disconnects.isEmpty)
     }
 
+    @Test func aMacThatTurnsSupportedLaterIsOfferedOnTheNextRead() {
+        // The framework's verdict is for *right now*, and a reading taken at
+        // listener startup can predate SidecarCore's own state settling. The
+        // service must therefore ask on every read: a latched early "no" hides
+        // the Sidecar entry from every phone until the Mac is restarted.
+        let bridge = StubSidecarBridge(isSupported: false, devices: [Self.ipad])
+        let service = makeService(bridge: bridge)
+        #expect(!service.isRemotelyAvailable)
+        bridge.isSupported = true
+        #expect(service.isRemotelyAvailable)
+        #expect(service.remoteSnapshot()?.devices.map(\.id) == [Self.ipad.identifier])
+    }
+
     @Test func aSupportedMacListsEveryDeviceAndTakesItsConnectionStateFromTheSystemList() throws {
         let bridge = StubSidecarBridge(devices: [Self.ipad, Self.studio], connected: [Self.studio.identifier])
         let service = makeService(bridge: bridge)

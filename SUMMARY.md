@@ -2031,7 +2031,7 @@ MacPilot 手动黑屏不会产生系统显示休眠通知，因此 held-blank �
 
 验证：QuickSearch 全部套件加配置／注册表／契约／资源相关套件共 118 条测试 16 个套件通过，配置与快捷键、Feature、Resource 相关 84 条通过；全新 scratch 目录的 Release 构建带 `-Xswiftc -warnings-as-errors` 通过（118.94s）。测试全部走注入的应用启动与文件查询替身，不打开用户的应用、不动用户文件。尚未完成：`Tests/Performance/README.md` 的 Phase 2 三十分钟采样要对着**已安装的进程**跑，发布不会替换本机正在运行的 `/Applications/MacPilot.app`，所以那轮 CPU/RSS 长时曲线还没测；替身适配器也不覆盖真实图标缓存与真实 Spotlight 行为，升级后需要手工验收一次呼出、启动与文件段落。
 
-## 七十二、手机端一键随航：Mac 驱动原生 Sidecar，手机只当遥控器（v1.2.1-beta.11）
+## 七十二、手机端一键随航：Mac 驱动原生 Sidecar，手机只当遥控器（v1.2.1-beta.11，能力位缓存修复在 beta.12）
 
 PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac 能发现的 iPad 列表，选一台就让 Mac 起原生随航会话。没有自建投屏、没有抓帧编码、没有 AirPlay 会话，Mac 侧只做一件事：调 `SidecarCore`。协议加三条鉴权命令 `getSidecarDevices`／`connectSidecar`／`disconnectSidecar` 和能力位 `sidecar`，模型是 `RemoteSidecarDevice`／`RemoteSidecarSnapshot`／`RemoteSidecarOperation`／`RemoteSidecarTargetRequest`。Mac 侧代码在 `Sources/MacPilot/Sidecar/`：`SidecarCoreBridge`（私有框架）、`SidecarService`（状态机）、`SidecarHosting`（远端接口）。
 
@@ -2047,6 +2047,8 @@ PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac �
 
 **兼容性按能证明的说。** 能力位是双重门控：只有 `+isSupported` 为真的机器才广告，且只广告给在 `features` 里声明了 `sidecar` 的客户端；已上架的 1.0／1.1 手机把能力当闭合枚举解析，既看不到这个位也不会发新命令，老手机连新 Mac 一切照旧。手机端首页那一行在不支持的 Mac 上是**消失**而不是变灰（链路断开时同样消失，因为那时对这台 Mac 一无所知），设置里的开关保留原位。上次使用的 iPad 按 Mac 分开存，两台 Mac 看到的 iPad 本来就不同；「搜不到设备」和「查不了」是两个状态，绝不共用一块空屏。
 
+**能力位那个判断绝不能缓存——发布第二天就抓到一个真 bug。** `SidecarCoreRuntime` 原本在第一次加载时把 `+isSupported` 的读数存进一个 `supported` 变量，之后所有读取都用缓存。问题在于「第一次」是什么时候：Bonjour TXT 记录是在监听器启动时发布的，那一刻就会读一次支持性——而 SidecarCore 自己的状态可能还没安定，于是**一个瞬时的「不支持」被锁死到进程结束**，之后每一次 `serverHello` 都不带 `sidecar`，手机端首页那一行就永远不出现，只有重启 MacPilot 才能恢复。证据是同机对照：`dns-sd -L "GFMBA" _macpilot._tcp local.` 读到正在跑的服务的 `caps=` 里没有 `sidecar`，而新起的探针进程在同一台 Mac、同一台 iPad 在场时报 `supported=true`。修法是把 `supported` 变量删掉，`isSupported` 每次读都重新问框架——只有 `dlopen` 和类查找是一次性的，因为它们才是真的不会变的部分。回归测试 `aMacThatTurnsSupportedLaterIsOfferedOnTheNextRead` 直接翻转桩的支持性，断言下一次读取就能广告。手机端的设置里那个随航开关是**本地显示偏好**，不代表 Mac 的能力，所以会出现「开关是开的、首页没有入口」这种看起来自相矛盾的画面——这是设计如此，不是两个 bug。
+
 **⚠️ 诚实声明：选择器只在 macOS 27.0.1 上验证过。** 14／15／26 的行为没有实测，`SidecarCore` 不带 module map 也不承诺稳定，任何一次系统更新都可能改签名——所以运行时解析 + 缺失即降级是这个功能的前提，不是可选项。同理，私有框架决定了它**不能进 Mac App Store**；本机 Developer ID 分发不受影响。
 
-**验证。** 协议包 91 个测试全绿（其中 8 个随航专用：三条命令的鉴权要求、快照编解码往返、能力位只向声明者广告、错误码词表冻结）。Mac 侧 `SidecarRemoteTests` 24 个测试 0.26 秒跑完；全量 `swift test`（1270 个测试）里两个随航套件同样全部通过——那一轮有个 Snapzy 测试把共享主 actor 占了 82 秒，排在后面的随航测试被推迟到 83.988 秒才结束，**但没有一个失败**，这正是「结论不依赖墙钟」的意义；同一轮里 12 个失败测试全是已知的饿死型 flake，单独 `--filter` 跑那 165 个测试 4 秒全绿。手机端 PilotNest 59 个测试、11 个套件通过，`TEST SUCCEEDED`。真机部分用一个 `/tmp` 下的独立探针（编译同一份 `Sources/MacPilot/Sidecar/` 源码，不碰 MacPilot 本体）在 macOS 27.0.1 + iPad16,1 上跑通：`supported=true`、发现 1 台设备；connect 立刻回 accepted 且诚实地报 `connected=[]`，2.2 秒后由系统的 `connectedDevices` 确认；保持 15 秒后 disconnect 立刻回 `phase=disconnecting` 且 `connected=["iPad"]`，1.2 秒后确认，最终 `connected=[]`。就是这次真机验证抓到了上面那个 `@escaping` 崩溃：第一次运行时探针在发起连接的瞬间 trap，但会话已经起来了——框架调用确实发出去了，只是回调没法安全返回。
+**验证。** 协议包 91 个测试全绿（其中 8 个随航专用：三条命令的鉴权要求、快照编解码往返、能力位只向声明者广告、错误码词表冻结）。Mac 侧 `SidecarRemoteTests` 24 个测试 0.26 秒跑完（修掉能力位缓存后加了第 25 个，两个套件同样全绿）；全量 `swift test`（1270 个测试）里两个随航套件同样全部通过——那一轮有个 Snapzy 测试把共享主 actor 占了 82 秒，排在后面的随航测试被推迟到 83.988 秒才结束，**但没有一个失败**，这正是「结论不依赖墙钟」的意义；同一轮里 12 个失败测试全是已知的饿死型 flake，单独 `--filter` 跑那 165 个测试 4 秒全绿。手机端 PilotNest 59 个测试、11 个套件通过，`TEST SUCCEEDED`。真机部分用一个 `/tmp` 下的独立探针（编译同一份 `Sources/MacPilot/Sidecar/` 源码，不碰 MacPilot 本体）在 macOS 27.0.1 + iPad16,1 上跑通：`supported=true`、发现 1 台设备；connect 立刻回 accepted 且诚实地报 `connected=[]`，2.2 秒后由系统的 `connectedDevices` 确认；保持 15 秒后 disconnect 立刻回 `phase=disconnecting` 且 `connected=["iPad"]`，1.2 秒后确认，最终 `connected=[]`。就是这次真机验证抓到了上面那个 `@escaping` 崩溃：第一次运行时探针在发起连接的瞬间 trap，但会话已经起来了——框架调用确实发出去了，只是回调没法安全返回。

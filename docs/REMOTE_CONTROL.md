@@ -425,6 +425,17 @@ disconnectSidecar    RemoteSidecarTargetRequest{deviceID} → snapshot payload
   stub can reproduce it — every test here drives the protocol, not the framework —
   so a change to `SidecarCoreRuntime` is not verified until it has moved a real
   iPad.
+- **The support verdict is never cached.** `+isSupported` answers for *right now*,
+  and the first question arrives at listener startup, when the Bonjour TXT record
+  is published and SidecarCore's own state may not have settled yet. Caching that
+  first answer froze a transient "no" for the whole process: the server kept
+  withholding the `sidecar` capability from every hello, so a phone that could
+  have driven Sidecar showed no entry at all while its settings page — which lists
+  the user's visibility preferences, not the Mac's advertisement — still showed the
+  toggle on. Only the `dlopen` and the class lookup are one-shot; the verdict is
+  re-asked on every read. Diagnosed by reading the running server's TXT record
+  (`dns-sd -L <name> _macpilot._tcp local.`): its `caps=` list lacked `sidecar`
+  while a fresh process on the same Mac reported support with an iPad present.
 
 ## Handshake
 
