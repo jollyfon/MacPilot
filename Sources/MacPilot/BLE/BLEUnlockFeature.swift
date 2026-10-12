@@ -114,6 +114,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
     private var unlockAttemptTask: Task<Void, Never>?
     private var unlockAttemptSlot = BLEUnlockAttemptSlot()
+    private var unlockSignalTrigger = BLEUnlockSignalTrigger()
     private var lastLoggedRSSIAt = Date.distantPast
     private var lastLoggedRSSI: Int?
     private var lastLoggedRSSIErrorAt = Date.distantPast
@@ -162,8 +163,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     private var automaticUnlockAllowed: Bool {
-        settings.isEnabled && presence && !manualLock && !systemSleep
+        settings.isEnabled && presence && monitoringHasFreshSignal && !manualLock && !systemSleep
             && (settings.wakeOnProximity || !activeConnectionsPaused)
+    }
+
+    private var waitingForAutomaticUnlock: Bool {
+        settings.isEnabled && hasMonitoredDevice && !manualLock
+            && settings.unlockRSSI != Self.unlockDisabled && !settings.wakeWithoutUnlocking
+            && screenLockState() == .locked
     }
     var screenLockHistory: [ScreenLockHistoryEntry] { settings.screenLockHistory.entries }
 
@@ -836,6 +843,18 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             }
         }
         resetSignalTimer(for: uuid)
+        // Monitoring one phone starts with a conservative "present" state to
+        // avoid locking before its first sample. That state, and steady presence
+        // across a later lock, have no presence edge to trigger an unlock.
+        // Only a new close RSSI sample and a confirmed locked session authorize
+        // this route; pairing/retained presence alone never does.
+        if unlockSignalTrigger.allowsAttempt(screenState: screenLockState()),
+           settings.unlockRSSI != Self.unlockDisabled, !settings.wakeWithoutUnlocking,
+           rssi >= settings.unlockRSSI,
+           automaticUnlockAllowed {
+            updatePresence(presence: true, reason: "nearbySignal")
+            if unlockAttemptSlot.isOccupied { unlockSignalTrigger.noteScheduled() }
+        }
     }
 
     private func startScanCleanupTimer() {
@@ -902,7 +921,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         log("connect monitored peripheral uuid=\(uuid.uuidString) state=\(String(describing: peripheral.state)) passive=\(settings.passiveMode)")
         centralMgr?.connect(peripheral, options: nil)
         runtime.connectionTimer?.stop()
-        runtime.connectionTimer = BackgroundTask.once(after: 60) { [weak self] in
+        runtime.connectionTimer = BackgroundTask.once(after: BLEConnectionRetryGate.connectionTimeout) { [weak self] in
             guard let self, let runtime = self.runtime(for: uuid),
                   let peripheral = runtime.peripheral, peripheral.state == .connecting else { return }
             self.centralMgr?.cancelPeripheralConnection(peripheral)
@@ -1193,6 +1212,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     private func recordScreenUnlock(at date: Date, source: ScreenLockHistorySource) {
+        unlockSignalTrigger.reset()
         guard settings.screenLockHistory.recordUnlock(at: date, source: source) else {
             log("screen unlock history ignored reason=unpaired-or-duplicate source=\(source.rawValue)")
             return
@@ -1227,6 +1247,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
         guard presence else {
             log("unlock skipped trigger=\(trigger) reason=notPresent")
+            return
+        }
+        guard monitoringHasFreshSignal else {
+            log("unlock skipped trigger=\(trigger) reason=noFreshSignal")
             return
         }
         guard settings.unlockRSSI != Self.unlockDisabled else {
@@ -1287,6 +1311,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         unlockAttemptTask?.cancel()
         unlockAttemptTask = nil
         unlockAttemptSlot.invalidate()
+        unlockSignalTrigger.reset()
         lastUnlockRequestAt = 0
     }
 
@@ -1309,6 +1334,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             log("unlock confirmation rejected source=\(source) screenState=\(state.rawValue)")
             return
         }
+        unlockSignalTrigger.reset()
 
         let requestAge = lastUnlockRequestAt > 0 ? now - lastUnlockRequestAt : nil
         if now - lastAutomaticUnlockConfirmationAt < 2 {
@@ -1491,6 +1517,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     @discardableResult
     func storePassword(_ password: String) -> Bool {
         let success = screenControl.credentials.storePassword(password)
+        if success { unlockSignalTrigger.reset() }
         objectWillChange.send()
         return success
     }
@@ -1903,7 +1930,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 self.log("display wake notification received")
                 self.displaySleep = false
                 self.screenControl.noteDisplaySleeping(false)
-                self.userActivityMonitor.noteDisplayWake(fromSleep: hadSleepTransition)
+                self.userActivityMonitor.noteDisplayWake(
+                    fromSleep: hadSleepTransition, waitingForUnlock: self.waitingForAutomaticUnlock
+                )
                 self.recoveringFromSystemSleep = false
                 self.wakeRetryTask?.cancel()
                 self.startDisplayWakeMonitoringRecovery(clearSignal: hadSleepTransition)
@@ -1919,7 +1948,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if !self.displayUnavailable {
-                    self.userActivityMonitor.noteDisplayWake(fromSleep: true)
+                    self.userActivityMonitor.noteDisplayWake(
+                        fromSleep: true, waitingForUnlock: self.waitingForAutomaticUnlock
+                    )
                     self.startDisplayWakeMonitoringRecovery(clearSignal: true)
                 }
                 self.reconcileActiveConnectionPolicy(reason: "heldBlankChanged", force: true)

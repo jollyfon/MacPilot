@@ -456,6 +456,11 @@ final class BLEUserActivityMonitor {
     static let startupGrace: TimeInterval = 30
     static let idleThreshold: TimeInterval = 30
     static let displayWakeGrace: TimeInterval = 10
+    /// Cold Bluetooth reconnection can use its full timeout before producing
+    /// RSSI. Keep one locked-screen wake window for that plus the finite typing
+    /// plan; a duplicate wake notification still cannot renew it.
+    static let unlockRecoveryWakeGrace: TimeInterval = BLEConnectionRetryGate.connectionTimeout
+        + (BLEUnlockAttemptPlan.standard.deadlines.last ?? 0) + displayWakeGrace
     private static let automaticUnlockMarker: Int64 = 0x4D_50_42_4C_45_55_4E // "MPBLEUN"
 
     private let uptime: () -> TimeInterval
@@ -529,12 +534,12 @@ final class BLEUserActivityMonitor {
     /// does not expose through global NSEvent monitoring. Give it one bounded
     /// active-connection window per idle period; repeated wake notifications
     /// cannot renew the allowance.
-    func noteDisplayWake(fromSleep: Bool, at time: TimeInterval? = nil) {
+    func noteDisplayWake(fromSleep: Bool, waitingForUnlock: Bool = false, at time: TimeInterval? = nil) {
         guard fromSleep else { return }
         let time = time ?? uptime()
-        guard !isUserActive(at: time), !wakeGraceConsumed else { return }
+        guard (!isUserActive(at: time) || waitingForUnlock), !wakeGraceConsumed else { return }
         wakeGraceConsumed = true
-        wakeGraceDeadline = time + Self.displayWakeGrace
+        wakeGraceDeadline = time + (waitingForUnlock ? Self.unlockRecoveryWakeGrace : Self.displayWakeGrace)
     }
 
     func isUserActive(at time: TimeInterval) -> Bool {
@@ -618,6 +623,20 @@ struct BLEUnlockAttemptPlan: Equatable {
     static let standard = BLEUnlockAttemptPlan(
         deadlines: [2, 5, 9, 14, 20]
     )
+}
+
+/// Steady near-device samples must notice a new lock without re-running the
+/// entire password plan forever after it fails in the same lock session.
+struct BLEUnlockSignalTrigger {
+    private(set) var hasScheduledForLock = false
+
+    mutating func allowsAttempt(screenState: BLEScreenLockState) -> Bool {
+        if screenState == .unlocked { reset() }
+        return screenState == .locked && !hasScheduledForLock
+    }
+
+    mutating func noteScheduled() { hasScheduledForLock = true }
+    mutating func reset() { hasScheduledForLock = false }
 }
 
 enum BLEUnlockConfirmation {
@@ -769,6 +788,7 @@ struct BLERequestGate {
 /// CoreBluetooth is still completing the previous connection attempt.
 struct BLEConnectionRetryGate {
     static let minimumRetryInterval: TimeInterval = 10
+    static let connectionTimeout: TimeInterval = 60
 
     private(set) var lastAttemptAt: Date?
 

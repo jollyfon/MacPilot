@@ -3,6 +3,42 @@ import Testing
 @testable import MacPilot
 
 struct BLEWakeRecoveryTests {
+    @Test @MainActor func lockedWakeGetsItsFullRecoveryBudgetEvenNearTheEndOfRecentInputGrace() {
+        var now: TimeInterval = 100
+        let activity = BLEUserActivityMonitor(uptime: { now }, observesEvents: false)
+        activity.start()
+        defer { activity.stop() }
+        now = 129
+        activity.noteDisplayWake(fromSleep: true, waitingForUnlock: true)
+        now = 160
+        #expect(activity.isUserActive(at: now), "An almost-expired startup/input allowance cannot truncate locked-screen recovery")
+        now = 129 + BLEUserActivityMonitor.unlockRecoveryWakeGrace
+        #expect(!activity.isUserActive(at: now))
+        activity.noteDisplayWake(fromSleep: true, waitingForUnlock: true)
+        #expect(!activity.isUserActive(at: now))
+    }
+
+    @Test func steadySignalsCannotRestartAnExhaustedPlanUntilANewLockOrRecovery() {
+        var trigger = BLEUnlockSignalTrigger()
+        var allowed = trigger.allowsAttempt(screenState: .locked)
+        #expect(allowed)
+        trigger.noteScheduled()
+        allowed = trigger.allowsAttempt(screenState: .locked)
+        #expect(!allowed)
+        allowed = trigger.allowsAttempt(screenState: .unknown)
+        #expect(!allowed)
+        allowed = trigger.allowsAttempt(screenState: .locked)
+        #expect(!allowed, "An unknown state cannot create another login attempt")
+        allowed = trigger.allowsAttempt(screenState: .unlocked)
+        #expect(!allowed)
+        allowed = trigger.allowsAttempt(screenState: .locked)
+        #expect(allowed)
+        trigger.noteScheduled()
+        trigger.reset()
+        allowed = trigger.allowsAttempt(screenState: .locked)
+        #expect(allowed)
+    }
+
     /// 在并发测试负载下，固定时长 sleep 不够可靠；改为有界轮询等待条件成立。
     @MainActor
     private func waitUntil(

@@ -6,6 +6,171 @@ import Testing
 
 @MainActor
 struct BLEMonitoringRestorationTests {
+    @Test func aWakeNotificationCannotAuthorizeUnlockBeforeAnyPhoneSignal() {
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: RecordingBluetoothScanner()
+        )
+        defer { model.shutdown() }
+        let center = NotificationCenter()
+        model.workspaceNotificationCenterOverride = center
+        model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = { .locked }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = -70
+        model.startObservingSystemState()
+        model.startMonitor(UUID())
+
+        center.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+
+        #expect(model.lastRSSI == nil)
+        #expect(!model.isUnlockAttemptScheduled, "A bound phone without a fresh signal must not authorize a password attempt")
+    }
+
+    @Test func firstFreshNearbySignalCanUnlockASingleBoundPhoneWithoutAPresenceEdge() {
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: RecordingBluetoothScanner()
+        )
+        defer { model.shutdown() }
+        model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = { .locked }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = -70
+        let phone = UUID()
+        model.startMonitor(phone)
+        #expect(!model.isUnlockAttemptScheduled, "Binding alone cannot authorize typing")
+
+        model.updateMonitoredPeripheral(-50, for: phone)
+
+        #expect(model.isUnlockAttemptScheduled, "A fresh close sample must trigger unlock even if presence was already true")
+    }
+
+    @Test func freshSignalCannotUndoAnExplicitManualOrRemoteLock() {
+        for source in [ScreenControlSource.localManual, .remoteExplicit] {
+            let model = BLEUnlockModel(
+                userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+                bluetoothScanner: RecordingBluetoothScanner()
+            )
+            defer { model.shutdown() }
+            model.displayUnavailableProbe = { false }
+            model.screenLockStateProbe = { .locked }
+            model.settings.isEnabled = true
+            model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+            model.settings.unlockRSSI = -70
+            let phone = UUID()
+            model.startMonitor(phone)
+            // Invoke attribution only, without locking a screen or posting keys.
+            model.screenControl.willLock?(source)
+            model.updateMonitoredPeripheral(-50, for: phone)
+            #expect(!model.isUnlockAttemptScheduled)
+        }
+    }
+
+    @Test func anAlreadyNearbyPhoneCanTriggerUnlockAfterTheSessionLocks() {
+        var state = BLEScreenLockState.unlocked
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: RecordingBluetoothScanner()
+        )
+        defer { model.shutdown() }
+        model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = { state }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = -70
+        let phone = UUID()
+        model.startMonitor(phone)
+        model.updateMonitoredPeripheral(-50, for: phone)
+        #expect(model.presence)
+        #expect(!model.isUnlockAttemptScheduled)
+
+        state = .locked
+        model.updateMonitoredPeripheral(-50, for: phone)
+
+        #expect(model.isUnlockAttemptScheduled, "Unlock must not require the phone to leave and return after locking")
+    }
+
+    @Test func bindingAndAWeakOrUnlockedSampleDoNotAuthorizeUnlock() {
+        for state in [BLEScreenLockState.locked, .unlocked, .unknown] {
+            let model = BLEUnlockModel(
+                userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+                bluetoothScanner: RecordingBluetoothScanner()
+            )
+            defer { model.shutdown() }
+            model.displayUnavailableProbe = { false }
+            model.screenLockStateProbe = { state }
+            model.settings.isEnabled = true
+            model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+            model.settings.unlockRSSI = -70
+            let phone = UUID()
+            model.startMonitor(phone)
+            #expect(!model.isUnlockAttemptScheduled)
+            model.updateMonitoredPeripheral(state == .locked ? -90 : -50, for: phone)
+            #expect(!model.isUnlockAttemptScheduled)
+        }
+    }
+
+    @Test func freshSignalAfterTenSecondsOfLockedWakeStillSchedulesUnlock() {
+        var now: TimeInterval = 100
+        let activity = BLEUserActivityMonitor(uptime: { now }, observesEvents: false)
+        let model = BLEUnlockModel(userActivityMonitor: activity, bluetoothScanner: RecordingBluetoothScanner())
+        defer { model.shutdown() }
+        let center = NotificationCenter()
+        model.workspaceNotificationCenterOverride = center
+        model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = { .locked }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = -70
+        model.startObservingSystemState()
+        let phone = UUID()
+        model.startMonitor(phone)
+        now = 131
+        model.evaluateUserActivityPolicy()
+        center.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        center.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        #expect(!model.presence, "Wake requires a fresh signal")
+
+        now = 142
+        model.evaluateUserActivityPolicy()
+        model.updateMonitoredPeripheral(-50, for: phone)
+
+        #expect(!model.activeConnectionsPaused, "The lock screen cannot rely on NSEvent input to keep reconnecting")
+        #expect(model.isUnlockAttemptScheduled, "The ten-second discovery deadline must not cancel later unlock retries")
+    }
+
+    @Test func lockedWakeRecoveryExpiresAndDuplicateWakesCannotExtendIt() {
+        var now: TimeInterval = 100
+        let activity = BLEUserActivityMonitor(uptime: { now }, observesEvents: false)
+        let model = BLEUnlockModel(userActivityMonitor: activity, bluetoothScanner: RecordingBluetoothScanner())
+        defer { model.shutdown() }
+        let center = NotificationCenter()
+        model.workspaceNotificationCenterOverride = center
+        model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = { .locked }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = -70
+        model.startObservingSystemState()
+        model.startMonitor(UUID())
+        now = 131
+        model.evaluateUserActivityPolicy()
+        center.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        center.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        now = 131 + BLEUserActivityMonitor.unlockRecoveryWakeGrace - 1
+        model.evaluateUserActivityPolicy()
+        #expect(!model.activeConnectionsPaused)
+        now += 1
+        model.evaluateUserActivityPolicy()
+        #expect(model.activeConnectionsPaused)
+        center.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        center.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        #expect(model.activeConnectionsPaused, "A repeated notification must not keep Bluetooth active indefinitely")
+    }
+
     @Test func displayWakePreemptsAnOlderSignalTimeoutRecovery() {
         let scanner = RecordingBluetoothScanner()
         let model = BLEUnlockModel(
@@ -250,7 +415,7 @@ struct BLEMonitoringRestorationTests {
     @Test func idleModelCancelsUnlockAndObservedInputResumesIt() {
         var now: TimeInterval = 100
         let activity = BLEUserActivityMonitor(uptime: { now }, observesEvents: false)
-        let model = BLEUnlockModel(userActivityMonitor: activity)
+        let model = BLEUnlockModel(userActivityMonitor: activity, bluetoothScanner: RecordingBluetoothScanner())
         defer { model.shutdown() }
         let workspaceCenter = NotificationCenter()
         model.workspaceNotificationCenterOverride = workspaceCenter
@@ -295,6 +460,7 @@ struct BLEMonitoringRestorationTests {
         let workspaceCenter = NotificationCenter()
         model.workspaceNotificationCenterOverride = workspaceCenter
         model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = { .unlocked }
         model.settings.isEnabled = true
         model.startObservingSystemState()
 
@@ -352,16 +518,22 @@ struct BLEMonitoringRestorationTests {
     }
 
     @Test func heldBlankNotificationPausesConnectionsCancelsUnlockAndResumesOnUnblank() {
-        let model = BLEUnlockModel(userActivityMonitor: BLEUserActivityMonitor(observesEvents: false))
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: RecordingBluetoothScanner()
+        )
         defer { model.shutdown() }
         var isBlanked = false
         let blankCenter = NotificationCenter()
         model.displayUnavailableProbe = { isBlanked }
+        model.screenLockStateProbe = { .locked }
         model.heldBlankNotificationCenterOverride = blankCenter
         model.settings.isEnabled = true
         model.settings.unlockRSSI = -70
         model.startObservingSystemState()
-        model.startMonitor(UUID())
+        let phone = UUID()
+        model.startMonitor(phone)
+        model.updateMonitoredPeripheral(-50, for: phone)
 
         model.updatePresence(presence: true, reason: "test-before-blank")
         #expect(model.isUnlockAttemptScheduled)
@@ -378,13 +550,19 @@ struct BLEMonitoringRestorationTests {
     }
 
     @Test func asleepDisplayWithoutWakeDoesNotScheduleUnlockButExplicitWakeCan() {
-        let model = BLEUnlockModel()
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: RecordingBluetoothScanner()
+        )
         defer { model.shutdown() }
         var displayUnavailable = true
         model.displayUnavailableProbe = { displayUnavailable }
+        model.screenLockStateProbe = { .locked }
         model.settings.isEnabled = true
         model.settings.unlockRSSI = -70
-        model.startMonitor(UUID())
+        let phone = UUID()
+        model.startMonitor(phone)
+        model.updateMonitoredPeripheral(-50, for: phone)
         model.updatePresence(presence: true, reason: "test-asleep")
         #expect(model.activeConnectionsPaused)
         #expect(!model.isUnlockAttemptScheduled)
