@@ -411,7 +411,8 @@ private final class Harness {
     init(
         enabled: Bool = true,
         existingPaths: Set<String>? = nil,
-        hotkey: SmartCaptureShortcutBinding = Harness.quietHotkey
+        hotkey: SmartCaptureShortcutBinding = Harness.quietHotkey,
+        hotKeyCenter: QuickSearchHotKeyCenter? = nil
     ) {
         suiteName = "MacPilotTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
@@ -428,7 +429,8 @@ private final class Harness {
             scopeProbe: scopeProbe,
             launcher: launcher,
             fileOpener: fileOpener,
-            availability: availability
+            availability: availability,
+            hotKeyCenter: hotKeyCenter
         )
         fileOpener.ledger = ledger
         availability.ledger = ledger
@@ -1422,6 +1424,115 @@ struct QuickSearchActionTests {
 
 // MARK: - 快捷键
 
+@MainActor
+private final class FakeQuickSearchHotKeyDriver: QuickSearchHotKeyDriver {
+    enum RegistrationPlan {
+        case succeed
+        case handlerFailure(Int)
+        case registrationFailure(Int)
+        case registrationFailureWithCleanupFailure(Int, Int)
+    }
+
+    enum UnregistrationPlan {
+        case released
+        case stillRegistered(Int)
+        case releasedWithCleanupFailure(Int)
+    }
+
+    private struct Registration {
+        let binding: SmartCaptureShortcutBinding
+        let eventIdentifier: QuickSearchHotKeyEventIdentifier
+        let onEvent: @MainActor () -> Void
+        var hotKeyActive = true
+    }
+
+    var registrationPlans: [RegistrationPlan] = []
+    var unregistrationStatuses: [OSStatus] = []
+    var unregistrationPlans: [UnregistrationPlan] = []
+    private var active: [QuickSearchHotKeyRegistrationToken: Registration] = [:]
+    private(set) var latestToken: QuickSearchHotKeyRegistrationToken?
+
+    var activeBindings: [SmartCaptureShortcutBinding] { active.values.filter(\.hotKeyActive).map(\.binding) }
+    var retainedHandlerCount: Int { active.count }
+
+    func eventIdentifier(for token: QuickSearchHotKeyRegistrationToken) -> QuickSearchHotKeyEventIdentifier? {
+        active[token]?.eventIdentifier
+    }
+
+    func register(
+        _ binding: SmartCaptureShortcutBinding,
+        eventIdentifier: QuickSearchHotKeyEventIdentifier,
+        onEvent: @escaping @MainActor () -> Void
+    ) -> QuickSearchHotKeyDriverResult {
+        let plan = registrationPlans.isEmpty ? .succeed : registrationPlans.removeFirst()
+        switch plan {
+        case .succeed:
+            let token = QuickSearchHotKeyRegistrationToken()
+            let registration = Registration(binding: binding, eventIdentifier: eventIdentifier, onEvent: onEvent)
+            active[token] = registration
+            latestToken = token
+            return .installed(token: token, status: Int(noErr))
+        case .handlerFailure(let status):
+            return .handlerInstallFailed(status: status)
+        case .registrationFailure(let status):
+            return .registrationFailed(status: status, cleanupToken: nil)
+        case .registrationFailureWithCleanupFailure(let registrationStatus, _):
+            let token = QuickSearchHotKeyRegistrationToken()
+            active[token] = Registration(
+                binding: binding,
+                eventIdentifier: eventIdentifier,
+                onEvent: onEvent,
+                hotKeyActive: false
+            )
+            latestToken = token
+            return .registrationFailed(status: registrationStatus, cleanupToken: token)
+        }
+    }
+
+    func unregister(_ token: QuickSearchHotKeyRegistrationToken) -> QuickSearchHotKeyUnregistrationResult {
+        if !unregistrationPlans.isEmpty {
+            switch unregistrationPlans.removeFirst() {
+            case .released:
+                active[token] = nil
+                return .keyReleased(handlerCleanupStatus: nil)
+            case .stillRegistered(let status):
+                return .stillRegistered(status: status)
+            case .releasedWithCleanupFailure(let status):
+                if var registration = active[token] {
+                    registration.hotKeyActive = false
+                    active[token] = registration
+                }
+                return .keyReleased(handlerCleanupStatus: status)
+            }
+        }
+        let status = unregistrationStatuses.isEmpty ? noErr : unregistrationStatuses.removeFirst()
+        if status == noErr {
+            active[token] = nil
+            return .keyReleased(handlerCleanupStatus: nil)
+        }
+        return .stillRegistered(status: Int(status))
+    }
+
+    /// Models Carbon delivering an event. The callback is queued like the production driver,
+    /// so a replacement/stop can invalidate it before it reaches the main actor.
+    func enqueueEvent(
+        for token: QuickSearchHotKeyRegistrationToken,
+        received: QuickSearchHotKeyEventIdentifier,
+        status: OSStatus = noErr
+    ) -> OSStatus {
+        guard let registration = active[token], registration.hotKeyActive else { return OSStatus(eventNotHandledErr) }
+        let disposition = quickSearchHotKeyEventDisposition(
+            status: status,
+            received: status == noErr ? received : nil,
+            expected: registration.eventIdentifier
+        )
+        guard disposition == noErr, received == registration.eventIdentifier else { return disposition }
+        let onEvent = registration.onEvent
+        Task { @MainActor in onEvent() }
+        return noErr
+    }
+}
+
 /// Carbon 的注册是**进程级**的：同一台机器上同一个组合只能被本进程注册一次，
 /// 并行跑会互相抢注，先跑的那个还没收干净就会让后面的用例报 -9878。
 /// 所以这个套件串行，且每个用例结束时必须注销。
@@ -1444,6 +1555,9 @@ struct QuickSearchHotKeyTests {
 
     @Test func aBindingOwnedByAnotherFeatureIsRefusedWithItsName() {
         let harness = Harness(hotkey: Harness.safeHotkey)
+        let originalBinding = harness.model.settings.hotkey
+        var persistCount = 0
+        harness.model.persist = { persistCount += 1 }
         harness.model.shortcutConflictChecker = { _ in MainSection.clipboard.titleKey }
 
         harness.model.setHotkey(SmartCaptureShortcutBinding(keyCode: UInt16(kVK_ANSI_G), modifiers: [.command, .option]))
@@ -1451,8 +1565,10 @@ struct QuickSearchHotKeyTests {
 
         let conflict = QuickSearchHotKeyError.conflictsWithOtherFeature(sectionTitleKey: MainSection.clipboard.titleKey)
         #expect(harness.model.hotKeyError == conflict)
+        #expect(harness.model.settings.hotkey == originalBinding)
+        #expect(persistCount == 0)
         // 冲突时不会留下「界面说已启用、实际按不动」的半注册状态。
-        #expect(!harness.model.isHotKeyRegistered)
+        #expect(harness.model.isHotKeyRegistered)
         for language in [AppLanguage.simplifiedChinese, AppLanguage.english] {
             let conflictingName = AppText.value(MainSection.clipboard.titleKey, language: language)
             let message = AppText.value(conflict.messageKey, language: language, arguments: [conflictingName])
@@ -1462,11 +1578,322 @@ struct QuickSearchHotKeyTests {
         }
     }
 
+    @Test func aCarbonRegistrationFailureKeepsThePreviousBindingAndDoesNotPersist() {
+        let driver = FakeQuickSearchHotKeyDriver()
+        driver.registrationPlans = [.succeed, .registrationFailure(-9878)]
+        let center = QuickSearchHotKeyCenter(driver: driver)
+        let harness = Harness(hotkey: Harness.safeHotkey, hotKeyCenter: center)
+        defer { harness.model.shutdown() }
+        let originalBinding = harness.model.settings.hotkey
+        var persistCount = 0
+        harness.model.persist = { persistCount += 1 }
+        let replacement = SmartCaptureShortcutBinding(
+            keyCode: UInt16(kVK_F14),
+            modifiers: [.command, .control, .option, .shift]
+        )
+
+        harness.model.setHotkey(replacement)
+
+        #expect(harness.model.hotKeyError == .registrationFailed(status: -9878))
+        #expect(harness.model.settings.hotkey == originalBinding)
+        #expect(persistCount == 0)
+        #expect(harness.model.isHotKeyRegistered)
+        #expect(driver.activeBindings == [originalBinding])
+    }
+
+    @Test func aReleasedOldHotKeyCommitsTheReplacementWhenHandlerCleanupIsPending() {
+        let driver = FakeQuickSearchHotKeyDriver()
+        let center = QuickSearchHotKeyCenter(driver: driver)
+        let harness = Harness(hotkey: Harness.safeHotkey, hotKeyCenter: center)
+        let replacement = SmartCaptureShortcutBinding(
+            keyCode: UInt16(kVK_F14),
+            modifiers: [.command, .control, .option, .shift]
+        )
+        var persistCount = 0
+        harness.model.persist = { persistCount += 1 }
+        driver.unregistrationPlans = [.releasedWithCleanupFailure(-9878)]
+
+        harness.model.setHotkey(replacement)
+
+        #expect(harness.model.settings.hotkey == replacement)
+        #expect(persistCount == 1)
+        #expect(harness.model.hotKeyError != nil)
+        #expect(center.registeredBinding == replacement)
+        #expect(center.lastRegistrationStatus == Int(noErr))
+        #expect(driver.activeBindings == [replacement])
+        #expect(driver.retainedHandlerCount == 2)
+
+        // Re-selecting the committed binding retries stale Carbon handler cleanup without
+        // writing the same preference again.
+        harness.model.setHotkey(replacement)
+        #expect(harness.model.hotKeyError == nil)
+        #expect(persistCount == 1)
+        #expect(center.lastRegistrationStatus == Int(noErr))
+        #expect(driver.retainedHandlerCount == 1)
+        harness.model.shutdown()
+    }
+
+    @Test func carbonCallbackContextStaysRetainedUntilHandlerRemovalIsConfirmed() {
+        var context: QuickSearchHotKeyContext? = QuickSearchHotKeyContext(
+            eventIdentifier: QuickSearchHotKeyEventIdentifier(signature: 1, identifier: 2),
+            onEvent: {}
+        )
+        weak let weakContext = context
+        let lease = QuickSearchHotKeyContextLease(context!)
+
+        context = nil
+        #expect(weakContext != nil)
+        #expect(lease.opaquePointer != nil)
+
+        lease.release()
+
+        #expect(lease.opaquePointer == nil)
+        #expect(weakContext == nil)
+        lease.release() // Removal retries cannot over-release the callback context.
+    }
+
+    @Test func failedRegistrationRetainsItsHandlerContextUntilCleanupRetries() {
+        let driver = FakeQuickSearchHotKeyDriver()
+        driver.registrationPlans = [.registrationFailureWithCleanupFailure(-9878, -9879)]
+        driver.unregistrationPlans = [.releasedWithCleanupFailure(-9879), .released]
+        let center = QuickSearchHotKeyCenter(driver: driver)
+
+        #expect(center.updateBinding(Harness.safeHotkey) == .registrationFailed(status: -9878))
+        #expect(!center.isRegistered)
+        #expect(center.hasOutstandingRegistrations)
+        #expect(driver.retainedHandlerCount == 1)
+
+        center.stop()
+        #expect(center.hasOutstandingRegistrations)
+        #expect(driver.retainedHandlerCount == 1)
+
+        center.stop()
+        #expect(!center.hasOutstandingRegistrations)
+        #expect(driver.retainedHandlerCount == 0)
+    }
+
+    @Test func stoppingAfterKeyReleaseClearsBindingAndRetriesHandlerCleanup() {
+        let driver = FakeQuickSearchHotKeyDriver()
+        let center = QuickSearchHotKeyCenter(driver: driver)
+        #expect(center.updateBinding(Harness.safeHotkey) == nil)
+        driver.unregistrationPlans = [.releasedWithCleanupFailure(-9878), .released]
+
+        center.stop()
+
+        #expect(!center.isRegistered)
+        #expect(center.registeredBinding == nil)
+        #expect(center.lastError == .cleanupPending(status: -9878))
+        #expect(!driver.activeBindings.contains(Harness.safeHotkey))
+        #expect(center.hasOutstandingRegistrations)
+        #expect(driver.retainedHandlerCount == 1)
+
+        center.stop()
+
+        #expect(!center.hasOutstandingRegistrations)
+        #expect(center.lastError == nil)
+        #expect(driver.retainedHandlerCount == 0)
+    }
+
+    @Test func anUnregistrationFailureIsReportedWithoutDiscardingTheOldRegistration() {
+        let driver = FakeQuickSearchHotKeyDriver()
+        let center = QuickSearchHotKeyCenter(driver: driver)
+        let original = Harness.safeHotkey
+        let replacement = SmartCaptureShortcutBinding(
+            keyCode: UInt16(kVK_F14),
+            modifiers: [.command, .control, .option, .shift]
+        )
+        #expect(center.updateBinding(original) == nil)
+        driver.unregistrationStatuses = [-9878]
+
+        let error = center.updateBinding(replacement)
+
+        #expect(error != nil)
+        #expect(center.lastError == error)
+        #expect(center.lastRegistrationStatus == -9878)
+        #expect(center.registeredBinding == original)
+        #expect(center.isRegistered)
+        #expect(driver.activeBindings == [original])
+        center.stop()
+    }
+
+    @Test func retryingTheExistingBindingCleansUpAFailedReplacementRollback() {
+        let driver = FakeQuickSearchHotKeyDriver()
+        let center = QuickSearchHotKeyCenter(driver: driver)
+        defer { center.stop() }
+        let original = Harness.safeHotkey
+        let replacement = SmartCaptureShortcutBinding(
+            keyCode: UInt16(kVK_F14),
+            modifiers: [.command, .control, .option, .shift]
+        )
+        #expect(center.updateBinding(original) == nil)
+        driver.unregistrationStatuses = [-9878, -9877]
+
+        #expect(center.updateBinding(replacement) == .unregistrationFailed(status: -9878))
+        #expect(center.registeredBinding == original)
+        #expect(driver.activeBindings.count == 2)
+
+        #expect(center.updateBinding(original) == nil)
+
+        #expect(center.registeredBinding == original)
+        #expect(driver.activeBindings == [original])
+    }
+
+    @Test func stopKeepsARegistrationWhenCarbonCannotUnregisterIt() {
+        let driver = FakeQuickSearchHotKeyDriver()
+        let center = QuickSearchHotKeyCenter(driver: driver)
+        let binding = Harness.safeHotkey
+        #expect(center.updateBinding(binding) == nil)
+        driver.unregistrationStatuses = [-9878, noErr]
+
+        center.stop()
+
+        #expect(center.isRegistered)
+        #expect(center.registeredBinding == binding)
+        #expect(center.lastRegistrationStatus == -9878)
+        #expect(center.lastError != nil)
+        #expect(driver.activeBindings == [binding])
+
+        center.stop()
+        #expect(!center.isRegistered)
+        #expect(center.registeredBinding == nil)
+        #expect(driver.activeBindings.isEmpty)
+    }
+
+    @Test func shutdownReportsAndRetriesAHotKeyCleanupFailure() {
+        let driver = FakeQuickSearchHotKeyDriver()
+        driver.unregistrationStatuses = [-9878, noErr]
+        let center = QuickSearchHotKeyCenter(driver: driver)
+        let harness = Harness(hotkey: Harness.safeHotkey, hotKeyCenter: center)
+
+        harness.model.shutdown()
+
+        #expect(harness.model.hotKeyError == .unregistrationFailed(status: -9878))
+        #expect(harness.model.isHotKeyRegistered)
+        #expect(driver.activeBindings == [Harness.safeHotkey])
+
+        harness.model.shutdown()
+
+        #expect(harness.model.hotKeyError == nil)
+        #expect(!harness.model.isHotKeyRegistered)
+        #expect(driver.activeBindings.isEmpty)
+    }
+
+    @Test func unknownCarbonEventIDsArePassedToTheNextHandler() {
+        let driver = FakeQuickSearchHotKeyDriver()
+        let center = QuickSearchHotKeyCenter(driver: driver)
+        let binding = Harness.safeHotkey
+        #expect(center.updateBinding(binding) == nil)
+        guard let token = driver.latestToken else {
+            #expect(Bool(false), "Registration did not produce a test token")
+            return
+        }
+        guard let registeredEvent = driver.eventIdentifier(for: token) else {
+            #expect(Bool(false), "Registration did not produce an event identifier")
+            return
+        }
+        var toggleCount = 0
+        center.onToggle = { toggleCount += 1 }
+        let status = driver.enqueueEvent(
+            for: token,
+            received: QuickSearchHotKeyEventIdentifier(
+                signature: registeredEvent.signature,
+                identifier: registeredEvent.identifier == UInt32.max ? 0 : registeredEvent.identifier + 1
+            )
+        )
+
+        #expect(status == OSStatus(eventNotHandledErr))
+        #expect(toggleCount == 0)
+        center.stop()
+    }
+
+    @Test func aCallbackQueuedBeforeReplacementIsIgnored() async {
+        let driver = FakeQuickSearchHotKeyDriver()
+        let center = QuickSearchHotKeyCenter(driver: driver)
+        var toggleCount = 0
+        center.onToggle = { toggleCount += 1 }
+        let original = Harness.safeHotkey
+        #expect(center.updateBinding(original) == nil)
+        guard let oldToken = driver.latestToken else {
+            #expect(Bool(false), "Registration did not produce a test token")
+            return
+        }
+        guard let oldEvent = driver.eventIdentifier(for: oldToken) else {
+            #expect(Bool(false), "Registration did not produce an event identifier")
+            return
+        }
+        let queuedStatus = driver.enqueueEvent(
+            for: oldToken,
+            received: oldEvent
+        )
+        let replacement = SmartCaptureShortcutBinding(
+            keyCode: UInt16(kVK_F14),
+            modifiers: [.command, .control, .option, .shift]
+        )
+
+        #expect(queuedStatus == noErr)
+        #expect(center.updateBinding(replacement) == nil)
+        await Task.yield()
+
+        #expect(toggleCount == 0)
+        center.stop()
+    }
+
+    @Test func aCallbackQueuedBeforeStopIsIgnored() async {
+        let driver = FakeQuickSearchHotKeyDriver()
+        let center = QuickSearchHotKeyCenter(driver: driver)
+        var toggleCount = 0
+        center.onToggle = { toggleCount += 1 }
+        #expect(center.updateBinding(Harness.safeHotkey) == nil)
+        guard let token = driver.latestToken else {
+            #expect(Bool(false), "Registration did not produce a test token")
+            return
+        }
+        guard let eventIdentifier = driver.eventIdentifier(for: token) else {
+            #expect(Bool(false), "Registration did not produce an event identifier")
+            return
+        }
+
+        #expect(driver.enqueueEvent(
+            for: token,
+            received: eventIdentifier
+        ) == noErr)
+        center.stop()
+        await Task.yield()
+
+        #expect(toggleCount == 0)
+    }
+
+    @Test func aSuccessfulCarbonReplacementReleasesTheOldBinding() {
+        let center = QuickSearchHotKeyCenter()
+        let probe = QuickSearchHotKeyCenter()
+        defer {
+            probe.stop()
+            center.stop()
+        }
+        let original = Harness.safeHotkey
+        let replacement = SmartCaptureShortcutBinding(
+            keyCode: UInt16(kVK_F14),
+            modifiers: [.command, .control, .option, .shift]
+        )
+
+        let originalError = center.updateBinding(original)
+        #expect(originalError == nil)
+        guard originalError == nil else { return }
+        let replacementError = center.updateBinding(replacement)
+        #expect(replacementError == nil)
+        guard replacementError == nil else { return }
+
+        #expect(probe.updateBinding(original) == nil)
+    }
+
     @Test func aValidBindingIsSavedAndPersisted() {
         let harness = Harness(hotkey: Harness.safeHotkey)
         var persisted = 0
         harness.model.persist = { persisted += 1 }
-        let replacement = SmartCaptureShortcutBinding(keyCode: UInt16(kVK_F7), modifiers: [.command, .control])
+        let replacement = SmartCaptureShortcutBinding(
+            keyCode: UInt16(kVK_F14),
+            modifiers: [.command, .control, .option, .shift]
+        )
 
         harness.model.setHotkey(replacement)
         defer { harness.model.shutdown() }
@@ -1740,6 +2167,105 @@ struct QuickSearchKeyRoutingTests {
             keyCode: UInt16(kVK_DownArrow), commandHeld: false, controlHeld: true, isComposingText: false
         ) == .passThrough)
     }
+}
+
+// MARK: - 原生输入框命令
+
+@MainActor
+struct QuickSearchNativeInputTests {
+    @Test func returnFromTheFieldEditorOpensTheSelectedApplicationOnce() async throws {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        let applications = sampleApps.map {
+            QuickSearchApplicationEntry(url: $0.url, name: "Demo \($0.name)", bundleIdentifier: $0.bundleIdentifier)
+        }
+        await harness.enable(entries: applications)
+        harness.model.openPanel()
+        harness.model.updateQuery("demo")
+        try #require(harness.model.results.count > 1)
+        harness.model.moveSelection(by: 1)
+        let selected = harness.model.results[1]
+        let field = QuickSearchQueryTextField()
+        field.onCommand = { harness.model.handleSearchKeyAction($0) }
+        harness.launcher.onLaunch = { harness.ledger.record("launch") }
+        harness.ledger.reset()
+
+        let handled = field.control(field, textView: NSTextView(), doCommandBy: NSSelectorFromString("insertNewline:"))
+        #expect(handled)
+        if handled { await harness.launcher.wait(forCalls: 1) }
+        #expect(harness.launcher.calls.count == 1)
+        #expect(harness.launcher.calls.first?.url == selected.url)
+        #expect(!harness.model.isPanelVisible)
+        #expect(harness.ledger.events == ["exists", "launch"])
+    }
+
+    @Test func escapeFromTheFieldEditorClosesWithoutLaunching() async {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        await harness.enable(entries: sampleApps)
+        harness.model.openPanel()
+        let field = QuickSearchQueryTextField()
+        field.onCommand = { harness.model.handleSearchKeyAction($0) }
+
+        #expect(field.control(field, textView: NSTextView(), doCommandBy: NSSelectorFromString("cancelOperation:")))
+        #expect(!harness.model.isPanelVisible)
+        #expect(harness.launcher.calls.isEmpty)
+    }
+
+    @Test func nativeEditorCommandsNavigateButKeepEditingCommandsNative() {
+        let field = QuickSearchQueryTextField()
+        let editor = NSTextView()
+        var actions: [QuickSearchKeyAction] = []
+        field.onCommand = { actions.append($0) }
+
+        #expect(field.control(field, textView: editor, doCommandBy: NSSelectorFromString("moveDown:")))
+        #expect(field.control(field, textView: editor, doCommandBy: NSSelectorFromString("moveUp:")))
+        #expect(!field.control(field, textView: editor, doCommandBy: NSSelectorFromString("deleteBackward:")))
+        #expect(actions == [.moveSelection(1), .moveSelection(-1)])
+    }
+
+    @Test func markedTextKeepsReturnEscapeAndNavigationInTheInputMethod() {
+        let field = QuickSearchQueryTextField()
+        let editor = QuickSearchMarkedEditor()
+        var actions: [QuickSearchKeyAction] = []
+        field.onCommand = { actions.append($0) }
+        for command in ["insertNewline:", "cancelOperation:", "moveUp:", "moveDown:"] {
+            #expect(!field.control(field, textView: editor, doCommandBy: NSSelectorFromString(command)))
+        }
+        #expect(actions.isEmpty)
+    }
+
+    @Test func committingMarkedTextDoesNotAlsoLaunchOrCloseThePanel() {
+        let field = QuickSearchQueryTextField()
+        let editor = NSTextView()
+        var actions: [QuickSearchKeyAction] = []
+        field.onCommand = { actions.append($0) }
+        // Some input methods clear marked text before forwarding the same event's command.
+        field.compositionAtEventStart = { true }
+        for command in ["insertNewline:", "cancelOperation:", "moveUp:", "moveDown:"] {
+            #expect(!field.control(field, textView: editor, doCommandBy: NSSelectorFromString(command)))
+        }
+        #expect(actions.isEmpty)
+        field.compositionAtEventStart = { false }
+        #expect(field.control(field, textView: editor, doCommandBy: NSSelectorFromString("insertNewline:")))
+        #expect(actions == [.openSelection])
+    }
+
+    @Test func nativeTextChangesUpdateTheSearchQuery() {
+        let field = QuickSearchQueryTextField()
+        var changes: [String] = []
+        field.onQueryChange = { changes.append($0) }
+        field.stringValue = "Safari"
+        field.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        field.stringValue = ""
+        field.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        #expect(changes == ["Safari", ""])
+    }
+}
+
+@MainActor
+private final class QuickSearchMarkedEditor: NSTextView {
+    override func hasMarkedText() -> Bool { true }
 }
 
 // MARK: - 性能实测

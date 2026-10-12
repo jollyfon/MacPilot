@@ -54,6 +54,23 @@ enum QuickSearchKeyAction: Equatable {
 
 enum QuickSearchKeyRouter {
     static func action(
+        command: Selector,
+        commandHeld: Bool,
+        controlHeld: Bool,
+        isComposingText: Bool
+    ) -> QuickSearchKeyAction {
+        let keyCode: UInt16
+        switch NSStringFromSelector(command) {
+        case "insertNewline:", "insertNewlineIgnoringFieldEditor:": keyCode = UInt16(kVK_Return)
+        case "cancelOperation:": keyCode = UInt16(kVK_Escape)
+        case "moveUp:": keyCode = UInt16(kVK_UpArrow)
+        case "moveDown:": keyCode = UInt16(kVK_DownArrow)
+        default: return .passThrough
+        }
+        return action(keyCode: keyCode, commandHeld: commandHeld, controlHeld: controlHeld, isComposingText: isComposingText)
+    }
+
+    static func action(
         keyCode: UInt16,
         commandHeld: Bool,
         controlHeld: Bool,
@@ -85,8 +102,8 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
     private weak var model: QuickSearchModel?
 
     private let hostingView: NSHostingView<QuickSearchPanelContent>
-    private var keyMonitor: Any?
     private var pendingResignClose: DispatchWorkItem?
+    private(set) var isHandlingComposedKey = false
 
     init(model: QuickSearchModel, onClose: @escaping () -> Void) {
         self.model = model
@@ -101,6 +118,7 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
         )
 
         isFloatingPanel = true
+        becomesKeyOnlyIfNeeded = false
         level = .statusBar
         // 跟随当前 Space、能盖在全屏 App 上、不参与 Exposé 抖动。
         collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .stationary]
@@ -116,6 +134,36 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    override func sendEvent(_ event: NSEvent) {
+        guard event.type == .keyDown else { super.sendEvent(event); return }
+        let previous = isHandlingComposedKey
+        isHandlingComposedKey = isComposingText
+        defer { isHandlingComposedKey = previous }
+        super.sendEvent(event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard isPresented, event.type == .keyDown, event.modifierFlags.contains(.command) else {
+            return super.performKeyEquivalent(with: event)
+        }
+        let action = QuickSearchKeyRouter.action(
+            keyCode: event.keyCode, commandHeld: true,
+            controlHeld: event.modifierFlags.contains(.control),
+            isComposingText: isComposingText || isHandlingComposedKey
+        )
+        guard action == .revealInFinder else { return super.performKeyEquivalent(with: event) }
+        model?.handleSearchKeyAction(action)
+        return true
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        guard isPresented, !isComposingText, !isHandlingComposedKey else {
+            super.cancelOperation(sender)
+            return
+        }
+        model?.closePanel()
+    }
+
     // MARK: 显示与关闭
 
     func open() {
@@ -125,18 +173,11 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
         positionOnScreen()
         orderFrontRegardless()
         makeKey()
-        installKeyMonitor()
-        // 延迟一拍再设第一响应者：同步设置会被随后的 makeKey 覆盖，输入框拿不到焦点。
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.isPresented else { return }
-            self.makeFirstResponder(self.hostingView)
-        }
     }
 
     override func close() {
         pendingResignClose?.cancel()
         pendingResignClose = nil
-        removeKeyMonitor()
         isPresented = false
         super.close()
         onClose()
@@ -191,54 +232,8 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
 
     // MARK: 键盘
 
-    private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            return self.handleKey(event)
-        }
-    }
-
-    private func removeKeyMonitor() {
-        if let keyMonitor {
-            NSEvent.removeMonitor(keyMonitor)
-        }
-        keyMonitor = nil
-    }
-
-    /// 返回 nil 表示事件已被消费。
-    private func handleKey(_ event: NSEvent) -> NSEvent? {
-        guard isPresented, let model else { return event }
-        let flags = event.modifierFlags
-            .intersection(.deviceIndependentFlagsMask)
-            .subtracting(.capsLock)
-        let action = QuickSearchKeyRouter.action(
-            keyCode: event.keyCode,
-            commandHeld: flags.contains(.command),
-            controlHeld: flags.contains(.control),
-            isComposingText: isComposingText
-        )
-        switch action {
-        case .openSelection:
-            model.performPrimaryAction()
-            return nil
-        case .revealInFinder:
-            model.revealSelectionInFinder()
-            return nil
-        case .closePanel:
-            model.closePanel()
-            return nil
-        case .moveSelection(let delta):
-            model.moveSelection(by: delta)
-            return nil
-        case .passThrough:
-            // 组词中的 Enter/Esc/方向键、以及 Cmd+A / Cmd+C / Cmd+V 原样放行。
-            return event
-        }
-    }
-
     /// 输入法是否正在组词（有 marked text / 候选词）。
-    /// SwiftUI 的输入框最终落在窗口的字段编辑器上，它就是一个 `NSTextView`。
+    /// 原生输入框使用窗口的字段编辑器，它就是一个 `NSTextView`。
     private var isComposingText: Bool {
         guard let textView = firstResponder as? NSTextView else { return false }
         return textView.markedRange().location != NSNotFound

@@ -114,7 +114,7 @@ struct QuickSearchSettingsView: View {
         switch error {
         case .invalidBinding:
             return model.t(error.messageKey)
-        case .handlerInstallFailed(let status), .registrationFailed(let status):
+        case .handlerInstallFailed(let status), .registrationFailed(let status), .unregistrationFailed(let status), .cleanupPending(let status):
             return model.t(error.messageKey, status)
         case .conflictsWithOtherFeature(let conflictingTitleKey):
             return model.t(error.messageKey, model.t(conflictingTitleKey))

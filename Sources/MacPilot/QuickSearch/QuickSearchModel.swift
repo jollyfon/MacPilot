@@ -111,7 +111,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     @Published private(set) var selectedRowIndex: Int = 0
     /// Spotlight 查不了的原因。有值时必须显示出来，不能显示成「没有结果」。
     @Published private(set) var fileSearchIssue: QuickSearchIndexIssue?
-    /// 快捷键注册失败的原因。有值时快捷键就是没生效，设置页要如实说明。
+    /// 快捷键注册或清理的错误/警告；实际注册状态由 `isHotKeyRegistered` 表示。
     @Published private(set) var hotKeyError: QuickSearchHotKeyError?
     /// 一次性错误提示（面板已关闭后的失败反馈）。
     @Published private(set) var transientNotice: String?
@@ -139,7 +139,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     private let launcher: QuickSearchLaunching
     private let fileOpener: QuickSearchFileOpening
     private let availability: QuickSearchItemAvailability
-    private lazy var hotKeyCenter = QuickSearchHotKeyCenter()
+    private let hotKeyCenter: QuickSearchHotKeyCenter
     private let fileDebounceTask = BackgroundTask()
     private let noticeDismissTask = BackgroundTask()
 
@@ -186,10 +186,12 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         scopeProbe: SpotlightScopeProbing? = nil,
         launcher: QuickSearchLaunching? = nil,
         fileOpener: QuickSearchFileOpening? = nil,
-        availability: QuickSearchItemAvailability? = nil
+        availability: QuickSearchItemAvailability? = nil,
+        hotKeyCenter: QuickSearchHotKeyCenter? = nil
     ) {
         let inventory = inventory ?? ApplicationInventory()
         self.inventory = inventory
+        self.hotKeyCenter = hotKeyCenter ?? QuickSearchHotKeyCenter()
         self.icons = icons ?? QuickSearchIconLoader()
         self.usage = usage ?? QuickSearchUsageStore()
         let probe = scopeProbe ?? SystemSpotlightScopeProbe()
@@ -222,7 +224,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         runtimeState = .starting
         hotKeyCenter.conflictChecker = shortcutConflictChecker
         hotKeyCenter.onToggle = { [weak self] in self?.togglePanel() }
-        hotKeyError = hotKeyCenter.updateBinding(settings.hotkey)
+        hotKeyError = hotKeyCenter.updateBinding(settings.hotkey) ?? hotKeyCenter.lastError
         icons.startMemoryPressureHandling()
         inventory.extraDirectories = settings.customDirectoryPaths
         runtimeState = .ready
@@ -234,13 +236,15 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     /// 同步清理：快捷键、查询、面板、索引缓存、图标缓存全部当场归还。
     func shutdown() {
         guard runtimeState != .disabled else {
+            hotKeyCenter.stop()
+            hotKeyError = hotKeyCenter.lastError
             closePanel()
             return
         }
         runtimeState = .stopping
         invalidateFileSearch()
         hotKeyCenter.stop()
-        hotKeyError = nil
+        hotKeyError = hotKeyCenter.lastError
         closePanel()
         dismissNoticeNow()
         clearResults(keepIndex: false)
@@ -279,22 +283,28 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
 
     /// 改快捷键。无效或注册失败都保留原绑定并说明原因——不能悄悄改掉用户的选择。
     func setHotkey(_ binding: SmartCaptureShortcutBinding) {
-        guard binding != settings.hotkey else { return }
+        let bindingChanged = binding != settings.hotkey
+        guard bindingChanged || hotKeyError != nil || hotKeyCenter.lastError != nil else { return }
         guard binding.isValid else {
             hotKeyError = .invalidBinding
             return
         }
-        settings.hotkey = binding
         if isRunning {
             hotKeyCenter.conflictChecker = shortcutConflictChecker
-            hotKeyError = hotKeyCenter.updateBinding(binding)
-            // 注册失败时快捷键确实没生效，但配置已经按用户的选择存下来，
-            // 用户可以在设置页换一个组合。
+            let error = hotKeyCenter.updateBinding(binding)
+            hotKeyError = error ?? hotKeyCenter.lastError
+            guard error == nil else { return }
+            if bindingChanged { settings.hotkey = binding }
         } else {
             hotKeyCenter.stop()
-            hotKeyError = nil
+            guard !hotKeyCenter.hasUnreleasedHotKeys else {
+                hotKeyError = hotKeyCenter.lastError
+                return
+            }
+            if bindingChanged { settings.hotkey = binding }
+            hotKeyError = hotKeyCenter.lastError
         }
-        persist?()
+        if bindingChanged { persist?() }
     }
 
     func setFileScope(_ scope: QuickSearchFileScope) {

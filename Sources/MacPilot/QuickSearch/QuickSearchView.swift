@@ -20,7 +20,6 @@ import SwiftUI
 struct QuickSearchPanelContent: View {
     @ObservedObject var model: QuickSearchModel
     @ObservedObject private var icons: QuickSearchIconLoader
-    @FocusState private var inputIsFocused: Bool
 
     init(model: QuickSearchModel) {
         self.model = model
@@ -58,10 +57,6 @@ struct QuickSearchPanelContent: View {
             transaction.animation = nil
             transaction.disablesAnimations = true
         }
-        .onAppear {
-            // 延迟一拍：宿主视图被设为 first responder 之后，焦点才能真正落到输入框。
-            DispatchQueue.main.async { inputIsFocused = true }
-        }
     }
 
     // MARK: 输入行
@@ -71,18 +66,8 @@ struct QuickSearchPanelContent: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField(
-                model.t("quickSearchPlaceholder"),
-                text: Binding(
-                    get: { model.query },
-                    set: { model.updateQuery($0) }
-                )
-            )
-            .textFieldStyle(.plain)
-            .font(.system(size: 15))
-            .focused($inputIsFocused)
-            // 输入法组词由 AppKit 的字段编辑器接管，这里不拦截任何按键。
-            .submitLabel(.done)
+            QuickSearchQueryField(model: model)
+                .frame(maxWidth: .infinity)
 
             if isSearching {
                 ProgressView()
