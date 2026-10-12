@@ -122,3 +122,26 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - Mac 安全测试 17 项、协议导航/命令纯测试 4 项通过；fresh Release `-Xswiftc -warnings-as-errors` 编译通过。只执行安全/mock 门禁，没有运行会触及真实屏幕状态的全量测试，也没有启动本机 MacPilot 或发送真实按键。
 - Canonical `metadata/version/1.2.2` 中英文更新说明包含默认关闭与按需开启说明；description、keywords、marketing/support URL 沿用 1.2.1。`asc metadata validate` 为 0 errors / 0 warnings；公开隐私标签核验不等于读取或修改 ASC 隐私问卷。
 - 本节记录发布门禁。处理有效、内部分发、等待审核、审核批准及上架必须分别以 ASC 中构建 34 的实际记录确认，不能由本地验签结果推断。
+
+## 2026-10-13：1.2.2 / 构建 36 上传失败——版本 train 已关闭
+
+- 目的是把「随航」功能发到 TestFlight。先按 1.2.2 / 构建 36 准备：IPA SHA-256 `2fe4e18d0e7b8435f994e391c25e06a044b3f9dd6887e76e555bcbee0e14dbde`，本地签名门禁全部通过（Apple Distribution、`codesign --verify --deep --strict`、profile `get-task-allow=false`、无设备名单、signer leaf DER 与 profile `DeveloperCertificates[0]` 一致）。
+- ASC upload `a03aa768-5f59-43ce-a0f3-2ab488235723` 处理为 `FAILED`，错误码 `90186`、`90062`。原因不是签名：`asc versions list` 显示 **1.2.2 已变为 `READY_FOR_SALE`**，该预发布 train 已关闭，与 2026-10-09 构建 29 的失败同因。构建 36 在 ASC 中没有留下 build 记录。
+- 结论与当时一致：`90186`/`90062` 要先查版本 train 状态，不要当成 profile 或证书问题重做签名。发 TestFlight 前应先确认目标 marketing version 在 ASC 里仍可编辑。
+
+## 2026-10-13：1.2.3 / 构建 37 TestFlight 内部分发
+
+- 新建版本 train：`asc versions create --version 1.2.3`，version id `62c45e31-2b58-42f6-b173-eb0ab45e5ee8`，状态 `PREPARE_FOR_SUBMISSION`；从 1.2.2 复制 description/keywords/marketingUrl/supportUrl/promotionalText（2 个 locale、8 项），不复制 `whatsNew`。1.2.2 仍是线上版本，未被改动。
+- `project.yml`：`MARKETING_VERSION` 1.2.2 → 1.2.3，`CURRENT_PROJECT_VERSION` → 37；`xcodegen generate` 后生成项目仍为 `CODE_SIGN_STYLE=Automatic`、`DEVELOPMENT_TEAM=U8U443D7ZL`，没有固定任何 profile UUID。
+- 最终 IPA：`/Users/guofeng/Downloads/PilotNest-1.2.3-37.ipa`（2,486,549 字节）；bundle `com.misswell.macpilot.remote`，版本/构建号 `1.2.3 (37)`，Team `U8U443D7ZL`，`MinimumOSVersion=17.0`，`ITSAppUsesNonExemptEncryption=false`。ZIP 完整性无错误。
+- IPA SHA-256：`1c33ee2460488bb3014007f9babec94af7f55c0231bedb9b22a179073d8f8ece`。
+- Signer leaf DER SHA-256：`c9f379c6ec0ebf40e7fd5c3034849bc40b466c3ab78a595b3de09f81d2d17040`，serial `7A601D1A847C8DD6EC50DBE3A7CECACC`，有效期 2026-09-06 → 2027-09-06；ASC 证书 id `J4Z29X3RMS`、类型 `DISTRIBUTION`，仍在证书列表中（未撤销）。这与历史记录里的 `62e7580e…`/serial `49C25FF7…` 是**不同证书**，两者都在本 profile 的 `DeveloperCertificates` 中（共 3 张）。
+- Profile：UUID `b6b2e034-9cf1-4475-8cc9-dda1fff53fe7`，名称 `iOS Team Store Provisioning Profile: com.misswell.macpilot.remote`，`IsXcodeManaged=true`，创建于 2026-09-12，有效至 2027-09-06，Platform `iOS/xrOS/visionOS`。Apple 签名的 CMS 属性中 `ProfileDistributionType=STORE`；`get-task-allow=false`、`beta-reports-active=true`、无 `ProvisionedDevices`、无 `ProvisionsAllDevices`；app-id/team 一致；4 项签名 entitlements 全部由 profile 授权且取值一致。
+- **Xcode-managed profile 不会出现在 `asc profiles list` 中**（该接口只返回手工创建的 profile，本次 12 条里没有它）。因此改用密码学验证代替 ASC 查表：`openssl cms -verify` 以 macOS 系统钥匙串里的 Apple Root CA 为信任锚，对 `embedded.mobileprovision` 返回 `CMS Verification successful`；把内容改一个字节后同一命令返回 `CMS Verification failure`，证明该检查有效。注意 `security cms -D` **只解码不验签**，篡改样本同样返回 0，不能用它作为完整性证据。
+- 本次 automatic export **成功**（`xcodebuild -exportArchive -exportOptionsPlist ExportOptions.plist -allowProvisioningUpdates`，method `app-store-connect`），不再需要构建 27–34 时的一次性手动导出；仓库自动签名设置未改。无嵌套扩展或 framework，单一 arm64 二进制。
+- 测试：iOS Simulator `test-without-building` 全量 59 项 / 11 suites 通过（含 `SidecarPanelPolicyTests` 11 项）；`swift test --filter Sidecar` 24 项 / 2 suites 通过。Release archive 与 Debug `build-for-testing` 编译均成功，仅剩既有告警（`RemoteVideoDecoder.swift` 的 Swift 6 并发告警、`TrackpadContainerView.swift:47` 的 LocalizedString 插值告警），非本次改动引入。
+- 二进制中确认包含随航实现（`SidecarDeviceSheet`、`RemoteSidecarSnapshot`、`connectSidecar`、`disconnectSidecar`、`MacPilotRemote.lastSidecarDevice.` 等 105 处 Sidecar 相关字符串）。
+- ASC Build ID：`93bb79f0-af61-4f17-a4c8-d1a91bd32330`，处理状态 `VALID`，`internalBuildState=IN_BETA_TESTING`，`autoNotifyEnabled=true`，`externalBuildState=READY_FOR_BETA_SUBMISSION`。内部组“内部”（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`，`isInternalGroup=true`、`hasAccessToAllBuilds=true`）的 builds relationship 包含此构建（组内共 34 个构建）；`asc publish testflight` 因该组已自动接收全部构建而跳过显式添加。
+- 中英文 What to Test 已写入并读回（zh-Hans 370 字、en-US 1029 字），内容为随航的测试要点而非营销文案。
+- Canonical `metadata/version/1.2.3/{en-US,zh-Hans}.json` 已按 1.2.2 沿用 description/keywords/marketing/support URL 并新写 `whatsNew`；`asc metadata validate` 为 0 errors / 0 warnings。**未执行 `asc metadata push`**，ASC 上 1.2.3 的 `whatsNew` 仍为空。
+- 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 37 附加到 1.2.3 版本。`VALID` 与 `IN_BETA_TESTING` 都不代表 Apple 已审核批准。
