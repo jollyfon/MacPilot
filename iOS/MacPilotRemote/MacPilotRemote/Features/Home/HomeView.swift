@@ -22,6 +22,7 @@ struct HomeView: View {
     @State private var trackpadModel: RemoteTrackpadModel?
     @State private var trackpadVisible = false
     @State private var desktopVisible = false
+    @State private var sidecarSheetVisible = false
     /// Text key of why the trackpad entry refused a tap, shown as an alert.
     @State private var trackpadHintKey: String?
 
@@ -100,6 +101,9 @@ struct HomeView: View {
                 Text(trackpadHintKey.map { appModel.text($0) } ?? "")
             }
         )
+        .sheet(isPresented: $sidecarSheetVisible) {
+            SidecarDeviceSheet()
+        }
     }
 
     @ViewBuilder
@@ -251,9 +255,14 @@ struct HomeView: View {
 
     @ViewBuilder
     private func actionGrid(_ actions: [RemoteControlFeature]) -> some View {
-        if !actions.isEmpty {
+        // Sidecar is the one screen row that disappears rather than dims. The
+        // capability belongs to the machine, and no wording makes a button this
+        // Mac can never honour look honest — the same rule hides it while the
+        // link is down, because nothing is known about the Mac then either.
+        let visible = actions.filter { $0 != .sidecar || appModel.supportsSidecar }
+        if !visible.isEmpty {
             LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(actions) { feature in
+                ForEach(visible) { feature in
                     actionButton(feature)
                 }
             }
@@ -332,7 +341,16 @@ struct HomeView: View {
             && (feature.group != .media || appModel.supportsMediaControl)
     }
 
+    @ViewBuilder
     private func actionButton(_ feature: RemoteControlFeature) -> some View {
+        if feature == .sidecar {
+            sidecarButton
+        } else {
+            commandButton(feature)
+        }
+    }
+
+    private func commandButton(_ feature: RemoteControlFeature) -> some View {
         let enabled = commandEnabled(feature)
         return Button {
             guard let command = feature.command else { return }
@@ -346,6 +364,23 @@ struct HomeView: View {
         .disabled(!enabled)
         .accessibilityLabel(appModel.text(feature.titleKey))
         .accessibilityIdentifier("control.\(feature.rawValue)")
+    }
+
+    /// Opens the device sheet instead of firing a command: the Mac has to be
+    /// asked which iPads it can see before there is anything to choose. It is
+    /// only rendered when the Mac advertised the capability, so it is never a
+    /// dead button.
+    private var sidecarButton: some View {
+        Button {
+            Haptics.impact()
+            sidecarSheetVisible = true
+        } label: {
+            ControlKeyLabel(title: appModel.text(RemoteControlFeature.sidecar.titleKey),
+                            icon: RemoteControlFeature.sidecar.icon, enabled: true)
+        }
+        .buttonStyle(ControlKeyStyle(prominent: false))
+        .accessibilityLabel(appModel.text(RemoteControlFeature.sidecar.titleKey))
+        .accessibilityIdentifier("control.sidecar")
     }
 
     // MARK: - Output levels

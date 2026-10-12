@@ -4,7 +4,7 @@ import MacPilotRemoteProtocol
 
 enum RemoteControlFeature: String, CaseIterable, Identifiable {
     case desktop, trackpad, keyboard
-    case displayOff, wakeDisplay, lockScreen, wakeAndUnlock
+    case displayOff, wakeDisplay, lockScreen, wakeAndUnlock, sidecar
     case mediaPrevious, mediaPlayPause, mediaNext
     case brightness, volume, mute
     case pageUp, pageDown, home, end
@@ -25,7 +25,7 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
     var group: Group {
         switch self {
         case .desktop, .trackpad, .keyboard: .input
-        case .displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock: .screen
+        case .displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock, .sidecar: .screen
         case .mediaPrevious, .mediaPlayPause, .mediaNext: .media
         case .brightness, .volume, .mute: .levels
         case .pageUp, .pageDown, .home, .end: .navigation
@@ -41,6 +41,7 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
         case .wakeDisplay: "actionWakeDisplay"
         case .lockScreen: "actionLock"
         case .wakeAndUnlock: "actionWakeAndUnlock"
+        case .sidecar: "sidecarEntry"
         case .mediaPrevious: "mediaPrevious"
         case .mediaPlayPause: "mediaPlayPause"
         case .mediaNext: "mediaNext"
@@ -63,6 +64,7 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
         case .wakeDisplay: "sun.max.fill"
         case .lockScreen: "lock.fill"
         case .wakeAndUnlock: "sunrise.fill"
+        case .sidecar: "rectangle.on.rectangle.angled"
         case .mediaPrevious: "backward.end.fill"
         case .mediaPlayPause: "playpause.fill"
         case .mediaNext: "forward.end.fill"
@@ -76,6 +78,8 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The single command a home row fires. `nil` for the rows that open a page
+    /// or a sheet instead: desktop, trackpad, keyboard and Sidecar.
     var command: RemoteCommand? {
         switch self {
         case .displayOff: .displayOff

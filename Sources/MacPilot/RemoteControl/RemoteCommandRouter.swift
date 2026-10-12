@@ -13,6 +13,10 @@ struct RemoteCommandRouter {
     /// answering `unsupportedCommand`, which is how a host without the feature
     /// (and every test that does not care) keeps compiling.
     private let dockGroups: (any RemoteDockGroupsHosting)?
+    /// Native Sidecar on this Mac. `nil` — or a host whose framework says this
+    /// machine cannot drive Sidecar — leaves the three Sidecar commands
+    /// answering `unsupportedCommand`.
+    private let sidecar: (any RemoteSidecarHosting)?
 
     private let logHandler: (String) -> Void
     private let mediaControl: (RemoteCommand) -> RemoteErrorCode?
@@ -21,12 +25,14 @@ struct RemoteCommandRouter {
     init(
         service: MacScreenControlService,
         dockGroups: (any RemoteDockGroupsHosting)? = nil,
+        sidecar: (any RemoteSidecarHosting)? = nil,
         mediaControl: @escaping (RemoteCommand) -> RemoteErrorCode? = { RemoteMediaControl.send($0) },
         navigationControl: @escaping (RemoteNavigationKey) -> RemoteErrorCode? = { RemoteNavigationControl.send($0) },
         log: @escaping (String) -> Void = { remoteControlLog($0) }
     ) {
         self.service = service
         self.dockGroups = dockGroups
+        self.sidecar = sidecar
         self.mediaControl = mediaControl
         self.navigationControl = navigationControl
         self.logHandler = log
@@ -93,6 +99,15 @@ struct RemoteCommandRouter {
         case .launchDockGroup, .launchDockGroupApp:
             return await respondToDockGroupLaunch(request, started: started)
 
+        case .getSidecarDevices:
+            guard let sidecar, let snapshot = sidecar.remoteSnapshot() else {
+                return failure(for: request, code: .unsupportedCommand)
+            }
+            return payloadResponse(request, started: started, payload: try? snapshot.encoded())
+
+        case .connectSidecar, .disconnectSidecar:
+            return respondToSidecarTarget(request, started: started)
+
         case .beginRealtimeInput, .endRealtimeInput,
              .beginTextInput, .textInput, .endTextInput,
              .beginRemoteVideo, .endRemoteVideo, .remotePointer, .remoteKey:
@@ -127,6 +142,30 @@ struct RemoteCommandRouter {
             return failure(for: request, code: .invalidMessage)
         }
         return payloadResponse(request, started: started, payload: try? snapshot.encoded())
+    }
+
+    /// Starts or ends one iPad's Sidecar session. The reply is the snapshot the
+    /// service reports *now*: a connect is accepted before the session exists,
+    /// and the phone watches `operation` on its next poll instead of blocking
+    /// here past its own timeout.
+    private func respondToSidecarTarget(_ request: RemoteRequest, started: Date) -> RemoteResponse {
+        guard let sidecar else {
+            return failure(for: request, code: .unsupportedCommand)
+        }
+        guard let target = RemoteSidecarTargetRequest.decoded(from: request.payload) else {
+            log("command refused reason=missingSidecarTarget command=\(request.command.rawValue)")
+            return failure(for: request, code: .invalidMessage)
+        }
+        let outcome = request.command == .connectSidecar
+            ? sidecar.remoteConnect(deviceID: target.deviceID)
+            : sidecar.remoteDisconnect(deviceID: target.deviceID)
+        switch outcome {
+        case .snapshot(let snapshot):
+            return payloadResponse(request, started: started, payload: try? snapshot.encoded())
+        case .failure(let code):
+            log("command refused reason=sidecar code=\(code.rawValue) command=\(request.command.rawValue)")
+            return failure(for: request, code: code)
+        }
     }
 
     /// The Dock group commands answer with the group snapshot instead of state

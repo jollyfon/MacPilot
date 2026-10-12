@@ -2370,7 +2370,8 @@ final class MacPilotModel: ObservableObject {
     lazy var remoteControl = RemoteControlServer(
         deviceStore: remoteDeviceStore,
         screenControl: ble.screenControl,
-        dockGroups: DockGroupsRemoteHost(model: dockGroups)
+        dockGroups: DockGroupsRemoteHost(model: dockGroups),
+        sidecar: SidecarService()
     )
     /// Dock Groups：分组配置 + 每个分组的 Helper App。
     let dockGroups = DockGroupsModel()

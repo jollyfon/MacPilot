@@ -111,6 +111,10 @@ final class RemoteConnectionManager {
     /// phone hides the section entirely — an unknown command rawValue would
     /// break an older Mac's decode of the request.
     var supportsDockGroups: Bool { serverCapabilities.contains(.dockGroups) }
+    /// The Mac can drive native Sidecar. Advertised per machine rather than per
+    /// build, so a Mac whose `SidecarCore` reports no support never shows the
+    /// entry at all.
+    var supportsSidecar: Bool { serverCapabilities.contains(.sidecar) }
     /// Identity learning is usable only after the server has proved possession
     /// of the pairing key. A capability from an unauthenticated hello must not
     /// start a proximity identity probe.
@@ -355,6 +359,9 @@ final class RemoteConnectionManager {
             clientID: UUID(uuidString: clientID),
             clientName: clientName,
             clientNonce: nonce,
+            // Declaring a feature is what lets the Mac advertise it back.
+            // `dockGroups` stays out because this build has no Dock-group UI;
+            // everything else, `sidecar` included, is understood here.
             features: RemoteCapability.allCases.filter { $0 != .dockGroups }.map(\.rawValue)
         )
         try? sendPlain(hello)

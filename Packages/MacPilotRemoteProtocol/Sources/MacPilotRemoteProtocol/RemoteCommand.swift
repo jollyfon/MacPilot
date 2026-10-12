@@ -48,6 +48,17 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
     /// Sends one explicit PageUp/PageDown/Home/End key to the foreground app.
     /// Carries a one-byte `RemoteNavigationKey` payload.
     case navigationKey
+    /// Lists the iPads the Mac can currently reach as Sidecar targets, plus the
+    /// operation in flight. Replies with a `RemoteSidecarSnapshot` payload.
+    case getSidecarDevices
+    /// Asks the Mac to start a native Sidecar session with one iPad. Carries a
+    /// `RemoteSidecarTargetRequest` payload and replies as soon as the request
+    /// is accepted — the snapshot's operation phase reports the outcome, which
+    /// arrives later than any sane RPC timeout.
+    case connectSidecar
+    /// Ends the Sidecar session of one iPad. Same payload and same
+    /// accepted-then-verify shape as `connectSidecar`.
+    case disconnectSidecar
 
     /// Commands that change the machine and therefore always require an
     /// authenticated, encrypted session.
@@ -61,7 +72,8 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
              .beginTextInput, .textInput, .endTextInput,
              .getDockGroups, .launchDockGroup, .launchDockGroupApp,
              .beginRemoteVideo, .endRemoteVideo, .remotePointer, .remoteKey,
-             .navigationKey:
+             .navigationKey,
+             .getSidecarDevices, .connectSidecar, .disconnectSidecar:
             return true
         }
     }
@@ -100,6 +112,12 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
     /// older capabilities, this is negotiated only when the client declares
     /// the matching feature, not merely because it supports remote desktop.
     case navigationKeys
+    /// The Mac can drive native Sidecar, so listing and connecting iPads is
+    /// safe to attempt. Advertised only when this machine actually supports
+    /// Sidecar at all; negotiated only for clients that declare the feature,
+    /// because an older phone cannot decode the three command rawValues and
+    /// hides the entry when the advertisement is absent.
+    case sidecar
 
     /// App Store 1.0/1.1 peers know only the four screen-control cases.
     /// Their synthesized Codable decoder rejects the entire hello on any new
@@ -115,7 +133,7 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
                 // but already understood all three input capability cases.
                 known.contains(capability.rawValue) || known.contains(Self.remoteDesktop.rawValue)
             case .remoteDesktop, .dockGroups, .mediaControl, .bleIdentityLearning,
-                 .navigationKeys:
+                 .navigationKeys, .sidecar:
                 known.contains(capability.rawValue)
             }
         }

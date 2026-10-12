@@ -44,6 +44,9 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
     /// Dock groups, when the app wires them in. Advertised as a capability and
     /// handed to every connection's router.
     let dockGroups: (any RemoteDockGroupsHosting)?
+    /// Native Sidecar, when the app wires it in and this machine supports it.
+    /// Shared by every connection, so one phone's session is visible to another.
+    let sidecar: (any RemoteSidecarHosting)?
 
     /// Raised when a pairing code becomes visible so the app can show it.
     var onPairingCodePresented: (@MainActor (String, String) -> Void)?
@@ -85,11 +88,13 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
         screenControl: MacScreenControlService,
         pairingManager: RemotePairingManager? = nil,
         dockGroups: (any RemoteDockGroupsHosting)? = nil,
+        sidecar: (any RemoteSidecarHosting)? = nil,
         log: @escaping (String) -> Void = { remoteControlLog($0) }
     ) {
         self.deviceStore = deviceStore
         self.screenControl = screenControl
         self.dockGroups = dockGroups
+        self.sidecar = sidecar
         self.logHandler = log
         self.inputCoordinator = RemoteInputCoordinator(log: log)
         self.pairingManager = pairingManager ?? RemotePairingManager(log: log)
@@ -297,6 +302,8 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
     // MARK: - RemoteConnectionHost
 
     var dockGroupsHosting: (any RemoteDockGroupsHosting)? { dockGroups }
+
+    var sidecarHosting: (any RemoteSidecarHosting)? { sidecar }
 
     func supportsBLEIdentityLearning(clientID: String) -> Bool {
         guard let fingerprint = deviceStore.pairedIdentityFingerprints[clientID] else { return false }

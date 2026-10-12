@@ -14,6 +14,9 @@ final class PairedMacStore: ObservableObject {
     private static let clientIDKey = "MacPilotRemote.clientID"
     private static let clientNameKey = "MacPilotRemote.clientName"
     private static let preferredKey = "MacPilotRemote.preferredMacID"
+    /// Per-Mac prefix, because two Macs see different iPads and remembering one
+    /// Mac's target would preselect a device the other cannot reach.
+    private static let sidecarTargetPrefix = "MacPilotRemote.lastSidecarDevice."
 
     @Published private(set) var pairedMacs: [PairedMac] = []
     @Published var preferredMacID: String? {
@@ -118,10 +121,26 @@ final class PairedMacStore: ObservableObject {
         if preferredMacID == nil { preferredMacID = mac.id }
     }
 
+    /// The iPad this Mac was last asked to mirror, so the Sidecar sheet can
+    /// offer it first after a restart.
+    func lastSidecarDeviceID(macID: String) -> String? {
+        defaults.string(forKey: Self.sidecarTargetPrefix + macID)
+    }
+
+    func setLastSidecarDeviceID(_ deviceID: String?, macID: String) {
+        let key = Self.sidecarTargetPrefix + macID
+        if let deviceID {
+            defaults.set(deviceID, forKey: key)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
     /// Removes the Mac and immediately deletes its Keychain pairing key.
     func remove(id: UUID) {
         pairedMacs.removeAll { $0.id == id.uuidString }
         RemoteKeychain.deletePairingKey(for: id.uuidString)
+        setLastSidecarDeviceID(nil, macID: id.uuidString)
         if preferredMacID == id.uuidString { preferredMacID = nil }
         persist()
     }
@@ -129,6 +148,7 @@ final class PairedMacStore: ObservableObject {
     func removeAll() {
         for mac in pairedMacs {
             RemoteKeychain.deletePairingKey(for: mac.id)
+            setLastSidecarDeviceID(nil, macID: mac.id)
         }
         pairedMacs.removeAll()
         preferredMacID = nil

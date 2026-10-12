@@ -51,6 +51,7 @@
 		ABAB1A3DD21B1D9F93831A4A /* MacPilotRemoteProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 2DA6CC718265164CF50E009F /* MacPilotRemoteProtocol */; };
 		AD1A6265CB77ADBDF69A32F8 /* RemoteAutomaticMacSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5B0D09B033A0991D0A7F09 /* RemoteAutomaticMacSelectionTests.swift */; };
 		AE22ED3FC0D9F79938EAFDB0 /* TouchHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F191E81E8CA9B2CCD4CF79A9 /* TouchHistory.swift */; };
+		AE3CA90F4FC1DCF98C3D983D /* SidecarDeviceSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E85CB3786D6F9876B2B4D79 /* SidecarDeviceSheet.swift */; };
 		B2072638812E9D738D98CA6F /* PressureSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E2DE683D33CF6736C45DE3 /* PressureSample.swift */; };
 		B34AB35731C1146F2A3516C4 /* RemoteControlPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC707A41C6093408D63F5E10 /* RemoteControlPreferences.swift */; };
 		BA215FCD67694460D269A62D /* PressureCurve.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4083ECB0625AD91715E766A6 /* PressureCurve.swift */; };
@@ -67,6 +68,8 @@
 		EDB6E4806D78609E8A2942F7 /* PressureDebugInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AD3A5D4789D587B13BE376E /* PressureDebugInfo.swift */; };
 		EFC379A087AD05F1A8951B4D /* TrackpadOrientationCompass.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1BF7246E89AE5367E76D9EF /* TrackpadOrientationCompass.swift */; };
 		F15537871D1809E163DF01BC /* GestureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D1267A79F7F5D73F8C52E77 /* GestureEngine.swift */; };
+		F6924314EE6A88C196606455 /* SidecarPanelPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F080E6D6418DFB7A61BB39C /* SidecarPanelPolicyTests.swift */; };
+		F6B84E79BE41DA884CB826BA /* SidecarPanelPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86A65F4B767DBDE239B16061 /* SidecarPanelPolicy.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -110,14 +113,17 @@
 		4FFFADB7FEE2749461D25A8E /* RemoteDiscoveryStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDiscoveryStateTests.swift; sourceTree = "<group>"; };
 		56CECE3731CF9AC98621E660 /* RemoteVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoView.swift; sourceTree = "<group>"; };
 		5AE3A75BF934E7F7884ACA12 /* RemoteKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteKeychain.swift; sourceTree = "<group>"; };
+		5F080E6D6418DFB7A61BB39C /* SidecarPanelPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarPanelPolicyTests.swift; sourceTree = "<group>"; };
 		66DDA158E305F0563D52F0AE /* RemoteBLEIdentityProbePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLEIdentityProbePolicyTests.swift; sourceTree = "<group>"; };
 		6DD7E33EB369C3302C36BADA /* RemoteText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteText.swift; sourceTree = "<group>"; };
+		6E85CB3786D6F9876B2B4D79 /* SidecarDeviceSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDeviceSheet.swift; sourceTree = "<group>"; };
 		7152877F9A213F21809D5A07 /* RemoteDesktopView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopView.swift; sourceTree = "<group>"; };
 		73F668EDF35E69390AC04692 /* RemoteVideoDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoDecoder.swift; sourceTree = "<group>"; };
 		781285C1ADB724EF9E3897A7 /* RemoteReconnectLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteReconnectLifecycleTests.swift; sourceTree = "<group>"; };
 		785EB92B352DD9B4153B1A56 /* InterfaceOrientationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfaceOrientationController.swift; sourceTree = "<group>"; };
 		7890B51F3A461DD34A2BF5C8 /* RemoteBLEPeripheral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLEPeripheral.swift; sourceTree = "<group>"; };
 		82CA21A9B57090EDDD6FFE1B /* MacPilotRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPilotRemoteApp.swift; sourceTree = "<group>"; };
+		86A65F4B767DBDE239B16061 /* SidecarPanelPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarPanelPolicy.swift; sourceTree = "<group>"; };
 		88731EE963FEAFE686E6DAF3 /* TrackpadClickSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadClickSound.swift; sourceTree = "<group>"; };
 		8BADBB71C31CBC31DE93557E /* RemoteKeyboardInputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteKeyboardInputView.swift; sourceTree = "<group>"; };
 		8D425482A5A46A96A727A35D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -284,6 +290,15 @@
 			path = State;
 			sourceTree = "<group>";
 		};
+		9325CE852E6017CD475D629A /* Sidecar */ = {
+			isa = PBXGroup;
+			children = (
+				6E85CB3786D6F9876B2B4D79 /* SidecarDeviceSheet.swift */,
+				86A65F4B767DBDE239B16061 /* SidecarPanelPolicy.swift */,
+			);
+			path = Sidecar;
+			sourceTree = "<group>";
+		};
 		9934B3C9E8F3E0FF5229B1EB /* App */ = {
 			isa = PBXGroup;
 			children = (
@@ -304,6 +319,7 @@
 				01CAC7E0F2DF99228A504D32 /* RemoteDesktop */,
 				52A3BC1C5D25FAF2F980050F /* RemoteTrackpad */,
 				04BEC7E993C260819B3BD1FE /* Settings */,
+				9325CE852E6017CD475D629A /* Sidecar */,
 				E21C2AB621EFBC8E6529C0E5 /* RootView.swift */,
 			);
 			path = Features;
@@ -348,6 +364,7 @@
 				4FFFADB7FEE2749461D25A8E /* RemoteDiscoveryStateTests.swift */,
 				781285C1ADB724EF9E3897A7 /* RemoteReconnectLifecycleTests.swift */,
 				21D83AE67089B04DF8E33CDD /* RemoteVideoZoomTests.swift */,
+				5F080E6D6418DFB7A61BB39C /* SidecarPanelPolicyTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -544,6 +561,7 @@
 				30541BD2DCFACD758D63B28C /* RemoteDiscoveryStateTests.swift in Sources */,
 				2CCED346F1F6F92AF0A9D473 /* RemoteReconnectLifecycleTests.swift in Sources */,
 				33110033AB36379243431578 /* RemoteVideoZoomTests.swift in Sources */,
+				F6924314EE6A88C196606455 /* SidecarPanelPolicyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -587,6 +605,8 @@
 				6E9F62D64507C5CC4E50142A /* RemoteVideoDecoder.swift in Sources */,
 				0C63A6B37405014D4C0B3A77 /* RemoteVideoView.swift in Sources */,
 				CC59413625ABC1AAEE0F80AA /* RootView.swift in Sources */,
+				AE3CA90F4FC1DCF98C3D983D /* SidecarDeviceSheet.swift in Sources */,
+				F6B84E79BE41DA884CB826BA /* SidecarPanelPolicy.swift in Sources */,
 				AE22ED3FC0D9F79938EAFDB0 /* TouchHistory.swift in Sources */,
 				9A1F5568F3ECD63FDD274EED /* TouchProcessor.swift in Sources */,
 				4D83CC38723DADECD8C365DD /* TrackpadClickSound.swift in Sources */,

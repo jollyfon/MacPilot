@@ -31,6 +31,11 @@ extension RemoteConnectionHost {
     /// commands answer `unsupportedCommand`.
     var dockGroupsHosting: (any RemoteDockGroupsHosting)? { nil }
 
+    /// Native Sidecar, when the host wires it up. `nil` on hosts without the
+    /// feature (and every test host), which makes the three Sidecar commands
+    /// answer `unsupportedCommand`.
+    var sidecarHosting: (any RemoteSidecarHosting)? { nil }
+
     /// What the TXT record and `serverHello` advertise. The Dock group
     /// capability is listed only when the host actually serves groups, so a
     /// phone never sends a command this build cannot route.
@@ -41,6 +46,11 @@ extension RemoteConnectionHost {
         ]
         if dockGroupsHosting != nil {
             capabilities.append(.dockGroups)
+        }
+        // Sidecar is advertised per machine, not per build: a Mac whose
+        // SidecarCore reports no support must not invite the phone to try.
+        if sidecarHosting?.isRemotelyAvailable == true {
+            capabilities.append(.sidecar)
         }
         return capabilities
     }
@@ -116,6 +126,7 @@ final class RemoteConnection: Identifiable {
         self.router = RemoteCommandRouter(
             service: host.screenControl,
             dockGroups: host.dockGroupsHosting,
+            sidecar: host.sidecarHosting,
             log: host.remoteLog
         )
         self.remoteAddress = transport.remoteHost

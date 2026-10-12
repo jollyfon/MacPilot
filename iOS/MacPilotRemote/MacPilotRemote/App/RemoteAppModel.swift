@@ -119,6 +119,24 @@ final class RemoteAppModel: ObservableObject {
     /// Members the Mac could not launch in the last group launch, listed in
     /// the info banner.
     @Published private(set) var dockGroupsMissingApps: [String] = []
+    /// The Mac's Sidecar picture: the iPads it can see, which one is mirroring,
+    /// and what it is doing right now. `nil` until the first answer and cleared
+    /// whenever the link goes away — a stale list would offer iPads this Mac can
+    /// no longer reach, and the phone has no way to check that itself.
+    @Published private(set) var sidecarSnapshot: RemoteSidecarSnapshot?
+    /// The target request on the wire, if any. The Mac answers "accepted" at
+    /// once and keeps working, so this is short; rows still stop responding
+    /// while it lasts, because a second tap would ask for the same session.
+    @Published private(set) var sidecarRequestInFlight: RemoteCommand?
+    /// A list fetch is on the wire. Drives the toolbar spinner only — rows keep
+    /// working, since a poll every few seconds must not make them blink.
+    @Published private(set) var isRefreshingSidecarList = false
+    /// The last fetch was refused or lost, which is what separates "cannot
+    /// search" from "found nothing" while the snapshot is still `nil`.
+    @Published private(set) var didFailToLoadSidecar = false
+    /// The iPad this Mac was last asked to mirror, remembered per Mac so the
+    /// sheet can mark it after a restart.
+    @Published private(set) var lastSidecarDeviceID: String?
     @Published var pairingPrompt: PairingPrompt?
     @Published private(set) var metrics = RemoteMetrics()
     /// Which link carries the session and through which interface, e.g.
@@ -220,6 +238,18 @@ final class RemoteAppModel: ObservableObject {
     /// Guards the state refresh so a connect plus a foreground event cannot both
     /// send one.
     private var isRefreshingState = false
+    /// Whether the Sidecar sheet is on screen. It is the only reason to poll.
+    private var isSidecarPanelVisible = false
+    private var sidecarPollTask: Task<Void, Never>?
+    /// Bumped on every start and stop so a finishing loop cannot schedule the
+    /// next tick of a stale one.
+    private var sidecarPollGeneration = 0
+    /// Guards the list fetch so a poll and a manual refresh cannot both send one.
+    private var isFetchingSidecarList = false
+    /// Request ordering. Every Sidecar request carries how many were sent before
+    /// it, and only a snapshot at least that new is stored.
+    private var sidecarSendSequence: UInt64 = 0
+    private var sidecarAppliedSequence: UInt64 = 0
 
     /// Retry cadence while the app is in the foreground. The first entries are
     /// deliberately tight: the user has just opened the app and is watching.
@@ -970,6 +1000,12 @@ final class RemoteAppModel: ObservableObject {
         isSendingLevel = false
         isRefreshingState = false
         isRefreshingDockGroups = false
+        // A Sidecar request that left on the old manager will never answer. The
+        // snapshot stays: this is the same Mac and the same session, and the
+        // next poll re-reads it anyway.
+        sidecarRequestInFlight = nil
+        isRefreshingSidecarList = false
+        isFetchingSidecarList = false
         if manager.isReady { pruneCandidates() }
         refreshRacingPaths()
         if switching { raceLog("upgraded to \(activeMethod?.rawValue ?? winner.method.rawValue)") }
@@ -1072,6 +1108,12 @@ final class RemoteAppModel: ObservableObject {
         )
         if wasPairing { store.preferredMacID = deviceID.uuidString }
         activeMac = store.mac(id: deviceID)
+        lastSidecarDeviceID = store.lastSidecarDeviceID(macID: deviceID.uuidString)
+        // A sheet left open through the drop lost its poll loop with the link.
+        if isSidecarPanelVisible {
+            startSidecarPolling()
+            Task { await refreshSidecarDevices() }
+        }
         startConnectSupervisor()
         startBLEIdentityProbeIfNeeded()
         updateAutomaticMacSelection()
@@ -1080,6 +1122,11 @@ final class RemoteAppModel: ObservableObject {
     private func handleDisconnected() {
         authenticatedDeviceID = nil
         finishBLEIdentityProbe()
+        // The iPad list belongs to the link that reported it, so it goes with
+        // it. Reconnecting asks again — which is also how a session the Mac
+        // started on its own shows up here. Clearing this side never touches
+        // the session itself.
+        clearSidecarState()
         guard connectionState != .idle else { return }
         if pairingTarget != nil {
             pairingPrompt = nil
@@ -1237,6 +1284,8 @@ final class RemoteAppModel: ObservableObject {
         dockGroupsMissingApps = []
         launchingDockGroupID = nil
         launchingDockAppID = nil
+        clearSidecarState()
+        lastSidecarDeviceID = nil
         pendingLevel = nil
         isSendingLevel = false
         isRefreshingState = false
@@ -1588,6 +1637,184 @@ final class RemoteAppModel: ObservableObject {
             errorKey = "errorNetwork"
         }
         Haptics.warning()
+    }
+
+    // MARK: - Sidecar
+
+    /// Whether the connected Mac can drive native Sidecar. The advertisement is
+    /// per machine, so an unsupported Mac hides the entry entirely instead of
+    /// showing a button that can never work.
+    var supportsSidecar: Bool { connection.supportsSidecar }
+
+    /// The sheet appearing and disappearing is what starts and stops polling.
+    /// Nothing else needs the list, and the Mac answers it from `SidecarCore`,
+    /// so a closed panel must cost it nothing.
+    func setSidecarPanelVisible(_ visible: Bool) {
+        guard isSidecarPanelVisible != visible else { return }
+        isSidecarPanelVisible = visible
+        if visible {
+            startSidecarPolling()
+            Task { await refreshSidecarDevices() }
+        } else {
+            stopSidecarPolling()
+        }
+    }
+
+    /// Fetches the Mac's list once. `userInitiated` is what spins the toolbar;
+    /// a background poll must not look like the user asked for a refresh.
+    func refreshSidecarDevices(userInitiated: Bool = false) async {
+        guard connectionState.isConnected, connection.supportsSidecar,
+              !isFetchingSidecarList, sidecarRequestInFlight == nil else { return }
+        let manager = connection
+        isFetchingSidecarList = true
+        if userInitiated { isRefreshingSidecarList = true }
+        sidecarSendSequence += 1
+        let sequence = sidecarSendSequence
+        defer {
+            if isCurrent(manager) {
+                isFetchingSidecarList = false
+                isRefreshingSidecarList = false
+            }
+        }
+        do {
+            let response = try await manager.send(.getSidecarDevices)
+            guard isCurrent(manager) else { return }
+            if let state = response.state { macState = state }
+            if response.success, let snapshot = RemoteSidecarSnapshot.decoded(from: response.payload) {
+                didFailToLoadSidecar = false
+                applySidecarSnapshot(snapshot, sequence: sequence)
+            } else {
+                // The Mac answered without a list. That is "cannot search",
+                // which the sheet reports as itself and never as "no devices".
+                didFailToLoadSidecar = true
+            }
+        } catch {
+            guard isCurrent(manager) else { return }
+            didFailToLoadSidecar = true
+        }
+    }
+
+    /// Asks the Mac to start mirroring one iPad. The reply means "accepted", not
+    /// "connected": bringing a session up outlasts the RPC window, so the
+    /// outcome arrives as the operation phase and the poll loop picks it up.
+    func connectSidecar(deviceID: String) {
+        sendSidecarTarget(.connectSidecar, deviceID: deviceID)
+    }
+
+    /// Ends the session of the iPad the user tapped. Never "whatever is
+    /// connected": the Mac owns the session, and a phone going away must not
+    /// tear down a display somebody is working on.
+    func disconnectSidecar(deviceID: String) {
+        sendSidecarTarget(.disconnectSidecar, deviceID: deviceID)
+    }
+
+    private func sendSidecarTarget(_ command: RemoteCommand, deviceID: String) {
+        guard connectionState.isConnected, connection.supportsSidecar else { return }
+        // The Mac refuses a concurrent operation. Refusing here as well keeps a
+        // second tap from looking accepted when it never went out.
+        guard SidecarPanelPolicy.canSendTargetRequest(
+            snapshot: sidecarSnapshot,
+            isRequestInFlight: sidecarRequestInFlight != nil
+        ) else { return }
+        Haptics.impact()
+        sidecarRequestInFlight = command
+        let manager = connection
+        sidecarSendSequence += 1
+        let sequence = sidecarSendSequence
+        Task { [weak self] in
+            guard let self else { return }
+            defer { if self.isCurrent(manager) { self.sidecarRequestInFlight = nil } }
+            let payload = try? RemoteSidecarTargetRequest(deviceID: deviceID).encoded()
+            do {
+                let response = try await manager.send(command, payload: payload)
+                guard self.isCurrent(manager) else { return }
+                if let state = response.state { self.macState = state }
+                guard response.success else {
+                    self.reportSidecarRefusal(response.error?.code)
+                    return
+                }
+                if let snapshot = RemoteSidecarSnapshot.decoded(from: response.payload) {
+                    self.didFailToLoadSidecar = false
+                    self.applySidecarSnapshot(snapshot, sequence: sequence)
+                }
+                if command == .connectSidecar { self.rememberSidecarTarget(deviceID) }
+            } catch let error as RemoteConnectionError {
+                guard self.isCurrent(manager) else { return }
+                self.errorKey = error.messageKey
+                Haptics.warning()
+            } catch {
+                guard self.isCurrent(manager) else { return }
+                self.errorKey = "errorNetwork"
+                Haptics.warning()
+            }
+        }
+    }
+
+    /// The Mac's own verdict, already a stable code, so it goes to the banner
+    /// exactly as it arrived.
+    private func reportSidecarRefusal(_ code: RemoteErrorCode?) {
+        errorKey = (code ?? .internalError).messageKey
+        Haptics.warning()
+    }
+
+    /// Stores one answer unless a newer one has already been applied. A poll
+    /// that left before a connect would otherwise overwrite the accepted
+    /// operation with the older, empty picture it was sent for.
+    private func applySidecarSnapshot(_ snapshot: RemoteSidecarSnapshot, sequence: UInt64) {
+        guard sequence >= sidecarAppliedSequence else { return }
+        sidecarAppliedSequence = sequence
+        sidecarSnapshot = snapshot
+    }
+
+    private func rememberSidecarTarget(_ deviceID: String) {
+        guard let macID = authenticatedDeviceID?.uuidString ?? activeMac?.id else { return }
+        store.setLastSidecarDeviceID(deviceID, macID: macID)
+        lastSidecarDeviceID = deviceID
+    }
+
+    /// Whether the Mac is mid-operation. A failure is a verdict rather than work
+    /// in progress, so it does not earn the fast cadence.
+    private var isSidecarOperationLive: Bool {
+        guard let phase = sidecarSnapshot?.operation?.phase else { return false }
+        return phase != .failed
+    }
+
+    private func startSidecarPolling() {
+        stopSidecarPolling()
+        let generation = sidecarPollGeneration
+        sidecarPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                guard let interval = SidecarPanelPolicy.pollInterval(
+                    isPanelVisible: self.isSidecarPanelVisible,
+                    isConnected: self.connectionState.isConnected,
+                    hasOperation: self.isSidecarOperationLive
+                ) else { return }
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled, self.isSidecarPanelVisible,
+                      generation == self.sidecarPollGeneration else { return }
+                await self.refreshSidecarDevices()
+            }
+        }
+    }
+
+    private func stopSidecarPolling() {
+        sidecarPollGeneration += 1
+        sidecarPollTask?.cancel()
+        sidecarPollTask = nil
+    }
+
+    /// Drops everything the previous link reported, so a reconnect has to ask
+    /// again instead of acting on a list that may be minutes old.
+    private func clearSidecarState() {
+        stopSidecarPolling()
+        sidecarSnapshot = nil
+        sidecarRequestInFlight = nil
+        isRefreshingSidecarList = false
+        isFetchingSidecarList = false
+        didFailToLoadSidecar = false
+        sidecarSendSequence = 0
+        sidecarAppliedSequence = 0
     }
 
     // MARK: - Output levels

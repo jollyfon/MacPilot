@@ -133,6 +133,24 @@ public enum RemoteErrorCode: String, Codable, Sendable, Equatable, CaseIterable 
     case screenRecordingPermissionRequired
     case remoteVideoUnavailable
 
+    /// This Mac cannot drive Sidecar at all: the framework is missing or the
+    /// machine is not supported. Distinct from an empty device list, which
+    /// means "supported, nothing in reach".
+    case sidecarUnavailable
+    /// The requested iPad is not in the Mac's current device list, so there is
+    /// nothing to address a session to.
+    case sidecarDeviceNotFound
+    /// The requested iPad already has a Sidecar session.
+    case sidecarAlreadyConnected
+    /// Another Sidecar connect/disconnect is still in flight.
+    case sidecarOperationInProgress
+    /// The framework refused because the iPad itself is unreachable — asleep,
+    /// locked or off Wi-Fi. Reported separately from a generic failure because
+    /// the fix belongs to the iPad, not to MacPilot.
+    case sidecarDeviceUnreachable
+    case sidecarConnectFailed
+    case sidecarDisconnectFailed
+
     case replayDetected
     case invalidMessage
     case internalError
@@ -298,6 +316,98 @@ public struct RemoteDockGroupLaunchRequest: Codable, Sendable, Equatable {
     public static func decoded(from payload: Data?) -> RemoteDockGroupLaunchRequest? {
         guard let payload, !payload.isEmpty else { return nil }
         return try? JSONDecoder().decode(RemoteDockGroupLaunchRequest.self, from: payload)
+    }
+}
+
+// MARK: - Sidecar
+
+/// What the Mac is doing with Sidecar right now. A finished connect clears the
+/// operation and marks the device connected instead, so `isConnected` on the
+/// wire always comes from the system's own connected-device list, never from
+/// the fact that a command was accepted.
+public enum RemoteSidecarPhase: String, Codable, Sendable, Equatable {
+    case connecting
+    case disconnecting
+    case failed
+}
+
+/// One iPad the Mac can reach as a Sidecar target.
+///
+/// `id` is the framework's device UUID. The name is decoration only: two iPads
+/// can be called "iPad", and addressing a session by name would connect the
+/// wrong one.
+public struct RemoteSidecarDevice: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let name: String
+    /// Hardware model ("iPad16,1"), when the framework reports one. Shown as a
+    /// subtitle so two same-named iPads stay distinguishable.
+    public let model: String?
+    public let isConnected: Bool
+
+    public init(id: String, name: String, model: String? = nil, isConnected: Bool) {
+        self.id = id
+        self.name = name
+        self.model = model
+        self.isConnected = isConnected
+    }
+}
+
+/// The Sidecar operation in flight, or the last one that failed. Rides in every
+/// snapshot so a poll never has to guess whether a device that is not connected
+/// yet is still on its way or already gave up.
+public struct RemoteSidecarOperation: Codable, Sendable, Equatable {
+    public let deviceID: String
+    public let phase: RemoteSidecarPhase
+    /// `.failed` only, and always one of the stable `sidecar*` codes.
+    public let errorCode: RemoteErrorCode?
+
+    public init(deviceID: String, phase: RemoteSidecarPhase, errorCode: RemoteErrorCode? = nil) {
+        self.deviceID = deviceID
+        self.phase = phase
+        self.errorCode = errorCode
+    }
+}
+
+/// The whole Sidecar picture: what the Mac can see, what is connected, and what
+/// it is currently doing. Rides in the payload of all three Sidecar commands.
+public struct RemoteSidecarSnapshot: Codable, Sendable, Equatable {
+    public let devices: [RemoteSidecarDevice]
+    public let operation: RemoteSidecarOperation?
+
+    public init(devices: [RemoteSidecarDevice], operation: RemoteSidecarOperation? = nil) {
+        self.devices = devices
+        self.operation = operation
+    }
+
+    /// The device currently connected, if the system reports one. Sidecar
+    /// drives a single iPad at a time, so this is what a target switch has to
+    /// tear down first.
+    public var connectedDevice: RemoteSidecarDevice? { devices.first(where: \.isConnected) }
+
+    public func encoded() throws -> Data { try JSONEncoder().encode(self) }
+
+    /// `nil` for a missing or undecodable payload.
+    public static func decoded(from payload: Data?) -> RemoteSidecarSnapshot? {
+        guard let payload, !payload.isEmpty else { return nil }
+        return try? JSONDecoder().decode(RemoteSidecarSnapshot.self, from: payload)
+    }
+}
+
+/// Payload for `connectSidecar` and `disconnectSidecar`.
+public struct RemoteSidecarTargetRequest: Codable, Sendable, Equatable {
+    public let deviceID: String
+
+    public init(deviceID: String) {
+        self.deviceID = deviceID
+    }
+
+    public func encoded() throws -> Data { try JSONEncoder().encode(self) }
+
+    /// `nil` for a missing or undecodable payload, which the server reports as
+    /// `invalidMessage` rather than picking a device on its own.
+    public static func decoded(from payload: Data?) -> RemoteSidecarTargetRequest? {
+        guard let payload, !payload.isEmpty else { return nil }
+        return try? JSONDecoder().decode(RemoteSidecarTargetRequest.self, from: payload)
     }
 }
 

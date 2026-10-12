@@ -30,6 +30,7 @@ Packages/MacPilotRemoteProtocol/     shared, used verbatim by both sides
     RemoteDiscovery.swift            Bonjour TXT record encode/decode
 
 Sources/MacPilot/ScreenControl/      screen control primitives (shared with BLE Unlock)
+Sources/MacPilot/Sidecar/            SidecarCore bridge + remote Sidecar service
 Sources/MacPilot/RemoteControl/      the Mac server
 iOS/MacPilotRemote/                  the iPhone app
 ```
@@ -272,8 +273,8 @@ Phones connected to older Macs disable the keys
 and show an update hint without sending unfamiliar command values.
 
 PilotNest Settings → Control features provides individual switches for remote
-screen, trackpad, keyboard, all four screen actions, all three media keys,
-brightness, volume, mute, and Page Up/Page Down/Home/End. They default to visible and persist on the phone
+screen, trackpad, keyboard, all four screen actions plus the Sidecar entry, all
+three media keys, brightness, volume, mute, and Page Up/Page Down/Home/End. They default to visible and persist on the phone
 across launches and Mac switches. The native settings list supports long-press
 drag reordering within each section, with permanent reorder handles. The new
 Paging & navigation section is appended after the four original sections.
@@ -352,6 +353,78 @@ launchDockGroupApp   RemoteDockGroupLaunchRequest{groupID, appID} → snapshot p
 - **Snapshot answers.** Launch replies carry the refreshed group list, so one
   round trip updates the rows; members that could not be resolved or launched
   ride along as `missingApps` names instead of failing the whole command.
+
+## Sidecar (start a native display session from the phone)
+
+Three authenticated commands let the phone ask the **Mac** to bring up or end a
+native Sidecar session with one of the Mac's own iPads:
+
+```
+getSidecarDevices    no payload → RemoteSidecarSnapshot payload
+connectSidecar       RemoteSidecarTargetRequest{deviceID} → snapshot payload
+disconnectSidecar    RemoteSidecarTargetRequest{deviceID} → snapshot payload
+```
+
+- **Capability gated twice.** `sidecar` is advertised in the Bonjour TXT record
+  and in `serverHello` only on a machine where `SidecarCore` reports support,
+  and only to a client that declares the feature itself. Shipped App Store
+  phones decode capabilities as a closed enum, so they never see the bit and
+  never send these commands; a Mac without Sidecar never shows the home entry.
+  The router answers `unsupportedCommand` either way. On the phone the home key
+  disappears rather than dims — nothing is known about a Mac while the link is
+  down — while its Settings switch keeps its saved position.
+- **The Mac owns the session.** `SidecarService` drives the private framework
+  through the same code path the system's own UI uses; the phone is a remote
+  controller only. MacPilot captures no screen, encodes no video and opens no
+  AirPlay session of its own — the pixels are entirely Apple's Sidecar.
+- **Accepted, then verified.** Bringing up a session outlasts the phone's RPC
+  timeout, so a connect replies *accepted* immediately and its outcome travels
+  as `RemoteSidecarSnapshot.operation.phase` (`connecting` / `disconnecting` /
+  `failed`). The phone polls only while the sheet is open: once a second during
+  an operation, every three seconds when idle, and never once it is closed or
+  the link drops.
+- **No timer on the Mac.** The service keeps no watchdog of its own: a deadline
+  travels on the operation record and is settled when the state is next read — by
+  a poll, by the next target request, or by the framework call returning. The
+  phone already asks once a second while the sheet is open, so a second loop here
+  would only be a second thing to get wrong.
+- **Connected means the system says so.** Neither a completion block without an
+  error nor the fact that we asked is proof: every verdict is re-read from the
+  framework's `connectedDevices` before the phone is told anything, including
+  before a timeout is reported, so a session that did come up is never
+  announced as a failure.
+- **One operation at a time.** A second target request while one is live is
+  refused with `sidecarOperationInProgress`, and the phone blocks its rows for
+  the same reason. Switching iPads ends the current session inside the same
+  operation (the phone asks for confirmation first); if that teardown fails,
+  the running session is left alone and no connect is attempted.
+- **Failures explain the last attempt, not a permanent state.** The framework's
+  error is mapped to a stable code — `sidecarUnavailable`,
+  `sidecarDeviceNotFound`, `sidecarAlreadyConnected`,
+  `sidecarDeviceUnreachable` (Wi-Fi off, asleep or locked),
+  `sidecarConnectFailed`, `sidecarDisconnectFailed` — and never leaks a system
+  message to the wire. Once the system state contradicts a failed attempt (the
+  user connected from the Mac, or the session ended on its own) the stale
+  verdict is cleared instead of being reported on every poll.
+- **No private symbol is assumed.** `SidecarCore` ships no module map and
+  promises no stability, so `SidecarCoreRuntime` resolves the handle, both
+  classes and every selector at runtime; anything missing degrades to
+  `.unsupported`. `dlopen` happens on the first question about Sidecar rather
+  than at launch — a Mac with remote control switched off never pays for it —
+  and the manager singleton is created only when a device list is actually asked
+  for, because creating it starts the framework talking to Rapport: advertising
+  the capability in a Bonjour record must not cost that. Selectors were verified
+  on macOS 27.0.1 (26A434); **this is not a
+  compatibility claim for other macOS releases**, and the private framework is
+  the reason this feature cannot ship in a Mac App Store build.
+- **The completion block escapes.** `connectToDevice:completion:` answers on the
+  framework's own queue, so the `@convention(c)` signature the IMP is cast to has
+  to declare its block parameter `@escaping`. Without that Swift hands over a
+  stack block and the runtime traps with *"closure argument passed as @noescape to
+  Objective-C has escaped"* the first time a session is genuinely requested. No
+  stub can reproduce it — every test here drives the protocol, not the framework —
+  so a change to `SidecarCoreRuntime` is not verified until it has moved a real
+  iPad.
 
 ## Handshake
 
@@ -615,6 +688,17 @@ python3 Scripts/generate-app-icon.py   # requires Pillow
 - `Tests/MacPilotTests/RemoteControlTests.swift` covers the screen control
   models, the command router, configuration coding, the pairing window and the
   paired device store.
+- `Tests/MacPilotTests/SidecarRemoteTests.swift` drives `SidecarService` against
+  a stub bridge — accepted-before-confirmed connects, the nil-error-is-not-a-
+  verdict rule, a session confirming exactly at the deadline, timeouts that
+  re-read the system first, target switching, stable error codes, and the
+  healing of a stale failure — plus the router's three Sidecar commands. No test
+  loads `SidecarCore`, so none of them can start a real session.
+- `iOS/MacPilotRemote/Tests/SidecarPanelPolicyTests.swift` covers the sheet's
+  pure rules: "cannot search" is never shown as "found nothing", an operation
+  outranks the system list, a failed attempt leaves the row usable while a live
+  one locks it, only a target switch asks for confirmation, and a closed sheet
+  or dead link polls nothing.
 
 Keychain backed types are tested through the in-memory `SecretStore`, so the test
 process never triggers a Keychain access prompt.

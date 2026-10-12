@@ -43,7 +43,7 @@ struct RemoteControlPreferencesTests {
         try withPreferences { preferences, _ in
             #expect(preferences.orderedGroups == RemoteControlFeature.Group.allCases)
             #expect(preferences.homeSections == [
-                [.desktop, .trackpad], [.displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock],
+                [.desktop, .trackpad], [.displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock, .sidecar],
                 [.mediaPrevious, .mediaPlayPause, .mediaNext], [.brightness, .volume, .mute]
             ])
         }
@@ -108,9 +108,11 @@ struct RemoteControlPreferencesTests {
             #expect(defaults.object(forKey: "remoteControl.featureOrder") == nil)
             #expect(defaults.object(forKey: "remoteControl.groupOrder") == nil)
             preferences.moveFeatures(in: .screen, fromOffsets: IndexSet([0, 2]), toOffset: 4)
-            #expect(preferences.features(in: .screen) == [.wakeDisplay, .wakeAndUnlock, .displayOff, .lockScreen])
+            #expect(preferences.features(in: .screen)
+                    == [.wakeDisplay, .wakeAndUnlock, .displayOff, .lockScreen, .sidecar])
             preferences.moveFeatures(in: .screen, fromOffsets: IndexSet([2, 3]), toOffset: 0)
-            #expect(preferences.features(in: .screen) == [.displayOff, .lockScreen, .wakeDisplay, .wakeAndUnlock])
+            #expect(preferences.features(in: .screen)
+                    == [.displayOff, .lockScreen, .wakeDisplay, .wakeAndUnlock, .sidecar])
         }
     }
 
@@ -135,7 +137,25 @@ struct RemoteControlPreferencesTests {
             #expect(RemoteControlFeature.home.navigationKey == .home)
             #expect(RemoteControlFeature.end.navigationKey == .end)
             #expect(RemoteControlFeature.mute.navigationKey == nil)
-            #expect(preferences.features(in: .screen) == [.displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock])
+            #expect(preferences.features(in: .screen)
+                    == [.displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock, .sidecar])
+        }
+    }
+
+    /// Sidecar opens a sheet, so it must not look like a one-shot command row:
+    /// the home grid branches on exactly this `nil`.
+    @Test func sidecarJoinsTheScreenSectionEnabledAndWithoutACommand() throws {
+        try withPreferences { preferences, _ in
+            #expect(RemoteControlFeature.sidecar.group == .screen)
+            #expect(preferences.isEnabled(.sidecar))
+            #expect(RemoteControlFeature.sidecar.command == nil)
+            #expect(RemoteControlFeature.sidecar.navigationKey == nil)
+            #expect(preferences.features(in: .screen).contains(.sidecar))
+            #expect(preferences.homeSections[1].contains(.sidecar))
+            preferences.setEnabled(false, for: .sidecar)
+            #expect(!preferences.homeSections.flatMap { $0 }.contains(.sidecar))
+            // Hiding keeps the row's place, so showing it again does not move it.
+            #expect(preferences.features(in: .screen).contains(.sidecar))
         }
     }
 
