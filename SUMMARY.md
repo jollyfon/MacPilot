@@ -2031,7 +2031,7 @@ MacPilot 手动黑屏不会产生系统显示休眠通知，因此 held-blank �
 
 验证：QuickSearch 全部套件加配置／注册表／契约／资源相关套件共 118 条测试 16 个套件通过，配置与快捷键、Feature、Resource 相关 84 条通过；全新 scratch 目录的 Release 构建带 `-Xswiftc -warnings-as-errors` 通过（118.94s）。测试全部走注入的应用启动与文件查询替身，不打开用户的应用、不动用户文件。尚未完成：`Tests/Performance/README.md` 的 Phase 2 三十分钟采样要对着**已安装的进程**跑，发布不会替换本机正在运行的 `/Applications/MacPilot.app`，所以那轮 CPU/RSS 长时曲线还没测；替身适配器也不覆盖真实图标缓存与真实 Spotlight 行为，升级后需要手工验收一次呼出、启动与文件段落。
 
-## 七十二、手机端一键随航：Mac 驱动原生 Sidecar，手机只当遥控器（v1.2.1-beta.11，能力位缓存修复在 beta.12）
+## 七十二、手机端一键随航：Mac 驱动原生 Sidecar，手机只当遥控器（v1.2.1-beta.11，能力位缓存修复在 beta.12，握手能力日志在 beta.13）
 
 PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac 能发现的 iPad 列表，选一台就让 Mac 起原生随航会话。没有自建投屏、没有抓帧编码、没有 AirPlay 会话，Mac 侧只做一件事：调 `SidecarCore`。协议加三条鉴权命令 `getSidecarDevices`／`connectSidecar`／`disconnectSidecar` 和能力位 `sidecar`，模型是 `RemoteSidecarDevice`／`RemoteSidecarSnapshot`／`RemoteSidecarOperation`／`RemoteSidecarTargetRequest`。Mac 侧代码在 `Sources/MacPilot/Sidecar/`：`SidecarCoreBridge`（私有框架）、`SidecarService`（状态机）、`SidecarHosting`（远端接口）。
 
@@ -2047,7 +2047,11 @@ PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac �
 
 **兼容性按能证明的说。** 能力位是双重门控：只有 `+isSupported` 为真的机器才广告，且只广告给在 `features` 里声明了 `sidecar` 的客户端；已上架的 1.0／1.1 手机把能力当闭合枚举解析，既看不到这个位也不会发新命令，老手机连新 Mac 一切照旧。手机端首页那一行在不支持的 Mac 上是**消失**而不是变灰（链路断开时同样消失，因为那时对这台 Mac 一无所知），设置里的开关保留原位。上次使用的 iPad 按 Mac 分开存，两台 Mac 看到的 iPad 本来就不同；「搜不到设备」和「查不了」是两个状态，绝不共用一块空屏。
 
-**能力位那个判断绝不能缓存——发布第二天就抓到一个真 bug。** `SidecarCoreRuntime` 原本在第一次加载时把 `+isSupported` 的读数存进一个 `supported` 变量，之后所有读取都用缓存。问题在于「第一次」是什么时候：Bonjour TXT 记录是在监听器启动时发布的，那一刻就会读一次支持性——而 SidecarCore 自己的状态可能还没安定，于是**一个瞬时的「不支持」被锁死到进程结束**，之后每一次 `serverHello` 都不带 `sidecar`，手机端首页那一行就永远不出现，只有重启 MacPilot 才能恢复。证据是同机对照：`dns-sd -L "GFMBA" _macpilot._tcp local.` 读到正在跑的服务的 `caps=` 里没有 `sidecar`，而新起的探针进程在同一台 Mac、同一台 iPad 在场时报 `supported=true`。修法是把 `supported` 变量删掉，`isSupported` 每次读都重新问框架——只有 `dlopen` 和类查找是一次性的，因为它们才是真的不会变的部分。回归测试 `aMacThatTurnsSupportedLaterIsOfferedOnTheNextRead` 直接翻转桩的支持性，断言下一次读取就能广告。手机端的设置里那个随航开关是**本地显示偏好**，不代表 Mac 的能力，所以会出现「开关是开的、首页没有入口」这种看起来自相矛盾的画面——这是设计如此，不是两个 bug。
+**能力位那个判断绝不能缓存——发布第二天就抓到一个真 bug。** `SidecarCoreRuntime` 原本在第一次加载时把 `+isSupported` 的读数存进一个 `supported` 变量，之后所有读取都用缓存。而 `advertisedCapabilities` 是每次握手实时计算的，缓存却挂在它下游的桥里，于是**一个瞬时的「不支持」被锁死到进程结束**：之后每一次 `serverHello` 都不带 `sidecar`，手机端首页那一行就永远不出现，只有重启 MacPilot 才能恢复。修法是把 `supported` 变量删掉，`isSupported` 每次读都重新问框架——只有 `dlopen` 和类查找是一次性的，因为它们才是真的不会变的部分。回归测试 `aMacThatTurnsSupportedLaterIsOfferedOnTheNextRead` 直接翻转桩的支持性，断言下一次读取就能广告。手机端的设置里那个随航开关是**本地显示偏好**，不代表 Mac 的能力，所以会出现「开关是开的、首页没有入口」这种看起来自相矛盾的画面——这是设计如此，不是两个 bug。
+
+**但别拿 Bonjour TXT 当证据，我被它骗过一次。** 最初判断「这台 Mac 有没有把能力告诉手机」用的是 `dns-sd -L "GFMBA" _macpilot._tcp local.` 的 `caps=`：beta.11 里没有 `sidecar`，而新起的探针进程报 `supported=true`，同机对照看起来铁证如山。实际上 TXT 是 `RemoteControlServer.makeListener` 在监听器创建那一刻算好、塞进 `NWListener.Service` 之后再也不重发的**快照**——它只能回答「监听器启动时是什么」，永远回答不了「手机现在收到了什么」。升级后的 beta.12 正在跑（pid 5050），TXT 依然不带 `sidecar`，而这与修复生效与否无关。权威是每次连接重算的 `serverHello`，所以客户端握手的日志行现在直接把协商后的 `caps=` 打出来，别再靠 TXT 推断。手机端确实会把 TXT 里的能力位解析进 `DiscoveredMac`，但 UI 只认握手，所以这块过期快照没有用户可见后果。
+
+**同机差分排除掉三个猜测。** 同一台 Mac、同一台 iPad、同一分钟内：命令行探针 `supported=true`；照着 MacPilot 的形状另做的 `.app` 探针（`LSUIElement`、同样的权限用途描述与 `NSBonjourServices`、Hardened Runtime 加 `disable-library-validation`、ad-hoc 签名）也报 `supported=true` 并列出那台 iPad。这个新 bundle id 一次授权都没拿到过却能报 true，于是「bundle 形状」「Hardened Runtime」「蓝牙／本地网络 TCC」三种解释同时被排除。剩下的解释就是时序：应用进程在自己启动的那一瞬间读到 false，而这正是「握手会实时重问、TXT 快照不会重发」的那类差异。手机端入口是否已经出现，还需要一次真实重连来确认。
 
 **⚠️ 诚实声明：选择器只在 macOS 27.0.1 上验证过。** 14／15／26 的行为没有实测，`SidecarCore` 不带 module map 也不承诺稳定，任何一次系统更新都可能改签名——所以运行时解析 + 缺失即降级是这个功能的前提，不是可选项。同理，私有框架决定了它**不能进 Mac App Store**；本机 Developer ID 分发不受影响。
 

@@ -342,7 +342,11 @@ final class RemoteConnection: Identifiable {
         let exchange = RemotePairingExchange(clientNonce: nonce, serverNonce: serverNonce)
         pairingExchange = exchange
         reply.publicKey = exchange.publicKeyData
-        host.remoteLog("client hello name=\(clientName ?? "?") paired=\(paired)")
+        let negotiated = reply.capabilities ?? []
+        // The hello is what the phone keys its UI off; the Bonjour TXT record is
+        // only a snapshot of this set taken when the listener started.
+        host.remoteLog("client hello name=\(clientName ?? "?") paired=\(paired) "
+            + "caps=\(negotiated.map(\.rawValue).sorted().joined(separator: ","))")
         try sendPlain(reply)
     }
 
