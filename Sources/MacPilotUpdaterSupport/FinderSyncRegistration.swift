@@ -25,13 +25,26 @@ public enum FinderSyncRegistration {
     public static func setEnabledByUser(
         _ enabled: Bool,
         at applicationURL: URL,
-        journal: FinderSyncRecoveryJournal = .standard,
+        journal: FinderSyncRecoveryJournal? = nil,
         execute: ([String]) throws -> String
     ) throws -> Bool {
         try Task<Never, Never>.checkCancellation()
+        let journal = try journal ?? FinderSyncRecoveryJournal.standard.scoped(to: applicationURL)
         return try journal.withExclusiveLock { access in
-            if let intent = try access.readIntent(), !intent.matches(applicationURL: applicationURL) {
-                throw FinderSyncRegistrationError.journalTargetMismatch
+            if let intent = try access.readIntent() {
+                guard intent.matches(applicationURL: applicationURL) else {
+                    throw FinderSyncRegistrationError.journalTargetMismatch
+                }
+                if enabled {
+                    try refreshCurrentTargetAndRestore(
+                        applicationURL: applicationURL,
+                        electionWasEnabled: isElectedForUse(in: try execute(queryArguments())),
+                        execute: { _ = try execute($0) },
+                        query: execute,
+                        access: access
+                    )
+                    return true
+                }
             }
             let initialQuery = try execute(queryArguments())
             if !enabled {
@@ -61,13 +74,14 @@ public enum FinderSyncRegistration {
 
     public static func withSuspendedElection(
         applicationURL: URL,
-        journal: FinderSyncRecoveryJournal = .standard,
+        journal: FinderSyncRecoveryJournal? = nil,
         execute: ([String]) throws -> Void,
         query: ([String]) throws -> String,
         restorationFailed: (Error) -> Void = { _ in },
         operation: () throws -> Void
     ) throws {
         try Task<Never, Never>.checkCancellation()
+        let journal = try journal ?? FinderSyncRecoveryJournal.standard.scoped(to: applicationURL)
         try journal.withExclusiveLock { access in
             let initialQuery = try query(queryArguments())
             var elected = isElectedForUse(in: initialQuery)
@@ -147,10 +161,11 @@ public enum FinderSyncRegistration {
     /// matching journal, a system-disabled extension remains disabled.
     public static func recoverIfEnabled(
         at applicationURL: URL,
-        journal: FinderSyncRecoveryJournal = .standard,
+        journal: FinderSyncRecoveryJournal? = nil,
         execute: ([String]) throws -> String
     ) throws -> Bool {
         try Task<Never, Never>.checkCancellation()
+        let journal = try journal ?? FinderSyncRecoveryJournal.standard.scoped(to: applicationURL)
         return try journal.withExclusiveLock { access in
             let initialQuery = try execute(queryArguments())
             let elected = isElectedForUse(in: initialQuery)

@@ -3,6 +3,104 @@ import Testing
 @testable import MacPilotUpdaterSupport
 
 struct FinderSyncRecoveryJournalTests {
+    @Test func anotherInstallationPendingRecoveryDoesNotBlockTheCurrentUpdate() throws {
+        try withTemporaryJournal { legacy, markerURL in
+            let current = URL(fileURLWithPath: "/Users/developer/Code/MacPilot.app")
+            let other = URL(fileURLWithPath: "/Applications/MacPilot.app")
+            try legacy.withExclusiveLock { try $0.writeIntent(for: other) }
+            let originalMarker = try Data(contentsOf: markerURL)
+            let currentJournal = try legacy.scoped(to: current)
+            var replaced = false
+
+            try FinderSyncRegistration.withSuspendedElection(
+                applicationURL: current,
+                journal: currentJournal,
+                execute: { _ in Issue.record("An unmarked disabled extension must not be enabled") },
+                query: { _ in plugInOutput(enabled: false, at: current) },
+                operation: { replaced = true }
+            )
+
+            #expect(replaced, "A valid recovery for another installed copy must not abort bundle replacement")
+            let ownerJournal = try legacy.scoped(to: other)
+            let pending = try ownerJournal.withExclusiveLock { try $0.readIntent() }
+            #expect(pending?.matches(applicationURL: other) == true)
+            let migratedMarker = try Data(contentsOf: ownerJournal.fileURL)
+            #expect(migratedMarker == originalMarker)
+            #expect(!FileManager.default.fileExists(atPath: markerURL.path), "Older helpers must no longer see another installation's marker")
+        }
+    }
+
+    @Test func scopedJournalsArePathBoundAndKeepTheLegacyCrossProcessLock() throws {
+        try withTemporaryJournal { legacy, _ in
+            let installed = try legacy.scoped(to: applicationURL)
+            let normalized = try legacy.scoped(to: URL(fileURLWithPath: "/Applications/../Applications/MacPilot.app"))
+            let workingCopy = try legacy.scoped(to: URL(fileURLWithPath: "/tmp/WorkingCopy/MacPilot.app"))
+            #expect(installed.fileURL == normalized.fileURL)
+            #expect(installed.fileURL != workingCopy.fileURL)
+            try legacy.withExclusiveLock { _ in
+                #expect(throws: FinderSyncRecoveryJournalError.lockBusy) {
+                    try workingCopy.withExclusiveLock { _ in }
+                }
+            }
+            try installed.withExclusiveLock { _ in
+                #expect(throws: FinderSyncRecoveryJournalError.lockBusy) {
+                    try workingCopy.withExclusiveLock { _ in }
+                }
+            }
+        }
+    }
+
+    @Test func matchingLegacyIntentRemainsRecoverableAfterMigration() throws {
+        try withTemporaryJournal { legacy, markerURL in
+            try legacy.withExclusiveLock { try $0.writeIntent(for: applicationURL) }
+            let scoped = try legacy.scoped(to: applicationURL)
+            var elected = false
+            let recovered = try FinderSyncRegistration.recoverIfEnabled(
+                at: applicationURL, journal: scoped,
+                execute: { arguments in
+                    if arguments.contains("use") { elected = true }
+                    return plugInOutput(enabled: elected, at: applicationURL)
+                }
+            )
+            #expect(recovered)
+            #expect(elected)
+            let pending = try scoped.withExclusiveLock { try $0.readIntent() }
+            #expect(pending == nil)
+            #expect(!FileManager.default.fileExists(atPath: markerURL.path))
+        }
+    }
+
+    @Test func invalidLegacyMarkerIsNeverMovedOrUsedToAuthorizeRecovery() throws {
+        try withTemporaryJournal { legacy, markerURL in
+            let invalid = Data("{\"schemaVersion\":999}".utf8)
+            try invalid.write(to: markerURL)
+            let scoped = try legacy.scoped(to: applicationURL)
+            #expect(throws: FinderSyncRecoveryJournalError.invalidMarker) {
+                try scoped.withExclusiveLock { _ in }
+            }
+            let preserved = try Data(contentsOf: markerURL)
+            #expect(preserved == invalid)
+            #expect(!FileManager.default.fileExists(atPath: scoped.fileURL.path))
+        }
+    }
+
+    @Test func migrationNeverOverwritesAnExistingPendingIntent() throws {
+        try withTemporaryJournal { legacy, markerURL in
+            let scoped = try legacy.scoped(to: applicationURL)
+            try scoped.withExclusiveLock { try $0.writeIntent(for: applicationURL) }
+            try legacy.withExclusiveLock { try $0.writeIntent(for: applicationURL) }
+            let legacyBytes = try Data(contentsOf: markerURL)
+            let scopedBytes = try Data(contentsOf: scoped.fileURL)
+            #expect(throws: FinderSyncRecoveryJournalError.invalidMarker) {
+                try scoped.withExclusiveLock { _ in }
+            }
+            let retainedLegacy = try Data(contentsOf: markerURL)
+            let retainedScoped = try Data(contentsOf: scoped.fileURL)
+            #expect(retainedLegacy == legacyBytes)
+            #expect(retainedScoped == scopedBytes)
+        }
+    }
+
     private let applicationURL = URL(fileURLWithPath: "/Applications/MacPilot.app")
     private let extensionIdentifier = "com.misswell.macpilot.finder-sync"
 

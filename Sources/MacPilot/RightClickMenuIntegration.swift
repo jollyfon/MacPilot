@@ -28,7 +28,6 @@ extension MacPilotModel {
                     try Task.checkCancellation()
                     return try FinderSyncRegistration.recoverIfEnabled(
                         at: application,
-                        journal: .standard,
                         execute: FinderSyncRecoveryRunner.run
                     )
                 }

@@ -387,6 +387,21 @@ struct FinderSyncRegistrationTests {
         }
     }
 
+    @Test func explicitEnableResumesAMatchingPendingIntentWithoutOverwritingIt() throws {
+        try withTemporaryJournal { journal in
+            let app = URL(fileURLWithPath: "/Applications/MacPilot.app")
+            try journal.withExclusiveLock { try $0.writeIntent(for: app) }
+            var elected = false
+            let enabled = try FinderSyncRegistration.setEnabledByUser(true, at: app, journal: journal) { arguments in
+                if arguments.contains("use") { elected = true }
+                return finderSyncOutput(enabled: elected, at: app)
+            }
+            #expect(enabled)
+            let pending = try journal.withExclusiveLock { try $0.readIntent() }
+            #expect(pending == nil)
+        }
+    }
+
     private func withTemporaryJournal<T>(_ body: (FinderSyncRecoveryJournal) throws -> T) throws -> T {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("FinderSyncRegistrationTests-\(UUID().uuidString)", isDirectory: true)

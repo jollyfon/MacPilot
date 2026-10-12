@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 
 public enum FinderSyncRecoveryJournalError: Error, Equatable, LocalizedError {
@@ -123,10 +124,60 @@ public struct FinderSyncRecoveryJournal {
     }
 
     public let fileURL: URL
-    private var lockURL: URL { fileURL.appendingPathExtension("lock") }
+    private let lockURL: URL
+    private let legacyFileURL: URL?
 
     public init(fileURL: URL) {
         self.fileURL = fileURL
+        self.lockURL = fileURL.appendingPathExtension("lock")
+        self.legacyFileURL = nil
+    }
+
+    public func scoped(to applicationURL: URL) throws -> FinderSyncRecoveryJournal {
+        let legacy = legacyFileURL ?? fileURL
+        return try FinderSyncRecoveryJournal(
+            fileURL: Self.scopedFileURL(for: applicationURL, legacyFileURL: legacy),
+            lockURL: lockURL,
+            legacyFileURL: legacy
+        )
+    }
+
+    private init(fileURL: URL, lockURL: URL, legacyFileURL: URL) {
+        self.fileURL = fileURL
+        self.lockURL = lockURL
+        self.legacyFileURL = legacyFileURL
+    }
+
+    private static func scopedFileURL(for applicationURL: URL, legacyFileURL: URL) throws -> URL {
+        guard let target = normalizedApplicationURL(applicationURL) else {
+            throw FinderSyncRecoveryJournalError.invalidTarget
+        }
+        let digest = SHA256.hash(data: Data(target.path.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        return legacyFileURL.deletingLastPathComponent()
+            .appendingPathComponent("FinderSyncRecovery", isDirectory: true)
+            .appendingPathComponent("\(digest).json")
+    }
+
+    /// Rename the legacy record into its owner's namespace, under the same
+    /// cross-process lock used by older helpers. This preserves the entire
+    /// pending intent; it does not recover, clear or retarget another app.
+    private func migrateLegacyIntentIfNeeded() throws {
+        guard let legacyFileURL,
+              let intent = try Access(fileURL: legacyFileURL).readIntent() else { return }
+        let ownerFile = try Self.scopedFileURL(
+            for: URL(fileURLWithPath: intent.applicationBundlePath),
+            legacyFileURL: legacyFileURL
+        )
+        guard !FileManager.default.fileExists(atPath: ownerFile.path) else {
+            // Two records cannot be merged or overwritten without proof of
+            // recovery. Preserve both and refuse an ambiguous migration.
+            throw FinderSyncRecoveryJournalError.invalidMarker
+        }
+        try FileManager.default.createDirectory(
+            at: ownerFile.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try FileManager.default.moveItem(at: legacyFileURL, to: ownerFile)
     }
 
     public static var standard: FinderSyncRecoveryJournal {
@@ -162,6 +213,7 @@ public struct FinderSyncRecoveryJournal {
         }
         defer { _ = flock(descriptor, LOCK_UN) }
 
+        try migrateLegacyIntentIfNeeded()
         return try operation(Access(fileURL: fileURL))
     }
 

@@ -147,7 +147,7 @@ private func install(_ arguments: UpdaterArguments) throws {
     let incoming = parent.appendingPathComponent(".MacPilot-update-\(token).app")
     let backupName = ".MacPilot-backup-\(token).app"
     let backup = parent.appendingPathComponent(backupName)
-    let journal = FinderSyncRecoveryJournal.standard
+    let journal = try FinderSyncRecoveryJournal.standard.scoped(to: arguments.destinationApplication)
     var applicationRollbackFailed = false
 
     do {
@@ -278,6 +278,21 @@ private func install(_ arguments: UpdaterArguments) throws {
 }
 
 do {
+    // Metadata repair only: no application replacement, relaunch, PlugInKit
+    // election or permission changes. Useful for older installed helpers that
+    // still read the shared legacy marker before the fixed version is installed.
+    if CommandLine.arguments.count == 3,
+       CommandLine.arguments[1] == "--migrate-findersync-journal" {
+        let application = URL(fileURLWithPath: CommandLine.arguments[2])
+        guard let identifier = Bundle(url: application)?.bundleIdentifier,
+              ["com.misswell.macpilot", "com.misswell.octopilot"].contains(identifier) else {
+            throw UpdaterError.invalidArguments
+        }
+        let journal = try FinderSyncRecoveryJournal.standard.scoped(to: application)
+        try journal.withExclusiveLock { _ = try $0.readIntent() }
+        print("FinderSync recovery records migrated without changing application or extension state.")
+        exit(0)
+    }
     let arguments = try UpdaterArguments()
     defer {
         try? FileManager.default.removeItem(at: arguments.stagingDirectory)

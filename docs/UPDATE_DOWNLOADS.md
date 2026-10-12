@@ -57,6 +57,14 @@ Stable 使用 GitHub `/releases/latest`，拒绝 draft、prerelease 及预发布
 
 自动更新不会重置任何 macOS 权限（TCC）；版本切换继续沿用相同 Bundle ID、签名身份与 FinderSync 注册逻辑。
 
+### FinderSync 恢复记录与多份安装
+
+恢复记录按应用的规范化绝对路径隔离在 `~/Library/Application Support/MacPilot/FinderSyncRecovery/<路径 SHA-256>.json`。各路径仍共用原来的跨进程锁，因为 Finder 扩展的启用状态由系统共同管理。记录只能授权恢复其原始应用路径；命令成功后还必须查询确认当前扩展路径已启用，才能清除记录。
+
+旧的 `FinderSyncRecovery.json` 在持锁后迁移到记录中原始应用的目录项，内容原样保留。另一份安装的未完成恢复不会阻止当前应用更新。无效记录或目标目录项已存在时拒绝迁移，保留现场。
+
+旧版更新助手若因另一份安装的记录报 `journalTargetMismatch`，可用新版 `MacPilotUpdater --migrate-findersync-journal <当前 MacPilot.app 的绝对路径>` 仅迁移恢复元数据，再由用户重新点击更新。此命令不会替换、退出或启动应用，也不会改变 Finder 扩展启用状态；迁移不代表原始安装的扩展恢复已完成。
+
 ## 构建示例：
 
 ```sh
