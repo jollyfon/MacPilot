@@ -14,6 +14,21 @@ protocol RemoteConnectionHost: AnyObject {
     var inputCoordinator: RemoteInputCoordinator { get }
     func supportsBLEIdentityLearning(clientID: String) -> Bool
 
+    /// Dock groups, when the host wires them up. `nil` on hosts without the
+    /// feature (and every test host), which makes the three Dock group
+    /// commands answer `unsupportedCommand`.
+    ///
+    /// A requirement, not just an extension default: a member the protocol does
+    /// not declare is resolved statically inside `advertisedCapabilities`, so a
+    /// host's own implementation would be shadowed by the default and the
+    /// feature would read as absent on every Mac, with no error on either side.
+    var dockGroupsHosting: (any RemoteDockGroupsHosting)? { get }
+
+    /// Native Sidecar, when the host wires it up. `nil` on hosts without the
+    /// feature (and every test host), which makes the three Sidecar commands
+    /// answer `unsupportedCommand`. Declared for the same reason as above.
+    var sidecarHosting: (any RemoteSidecarHosting)? { get }
+
     func remoteConnection(
         _ connection: RemoteConnection,
         didAuthenticate clientID: String,
@@ -26,14 +41,7 @@ protocol RemoteConnectionHost: AnyObject {
 
 extension RemoteConnectionHost {
     func supportsBLEIdentityLearning(clientID: String) -> Bool { false }
-    /// Dock groups, when the host wires them up. `nil` on hosts without the
-    /// feature (and every test host), which makes the three Dock group
-    /// commands answer `unsupportedCommand`.
     var dockGroupsHosting: (any RemoteDockGroupsHosting)? { nil }
-
-    /// Native Sidecar, when the host wires it up. `nil` on hosts without the
-    /// feature (and every test host), which makes the three Sidecar commands
-    /// answer `unsupportedCommand`.
     var sidecarHosting: (any RemoteSidecarHosting)? { nil }
 
     /// What the TXT record and `serverHello` advertise. The Dock group
@@ -47,9 +55,12 @@ extension RemoteConnectionHost {
         if dockGroupsHosting != nil {
             capabilities.append(.dockGroups)
         }
-        // Sidecar is advertised per machine, not per build: a Mac whose
-        // SidecarCore reports no support must not invite the phone to try.
-        if sidecarHosting?.isRemotelyAvailable == true {
+        // Sidecar is advertised per build, not per machine: the bit means "this
+        // Mac answers the three Sidecar commands". Whether it can drive a display
+        // right now is a verdict it gives per request, and gating the bit on that
+        // verdict meant a phone that could have asked never asked — which read as
+        // a broken feature on a Mac whose SidecarCore had simply not settled yet.
+        if sidecarHosting != nil {
             capabilities.append(.sidecar)
         }
         return capabilities
@@ -343,9 +354,14 @@ final class RemoteConnection: Identifiable {
         pairingExchange = exchange
         reply.publicKey = exchange.publicKeyData
         let negotiated = reply.capabilities ?? []
+        // All three sets, because the negotiated list alone cannot say who refused:
+        // a missing bit here means either this Mac does not offer it or the phone
+        // never declared it, and the fix is on the other side in each case.
         // The hello is what the phone keys its UI off; the Bonjour TXT record is
         // only a snapshot of this set taken when the listener started.
         host.remoteLog("client hello name=\(clientName ?? "?") paired=\(paired) "
+            + "advertised=\(capabilities.map(\.rawValue).sorted().joined(separator: ",")) "
+            + "features=\((message.features ?? []).sorted().joined(separator: ",")) "
             + "caps=\(negotiated.map(\.rawValue).sorted().joined(separator: ","))")
         try sendPlain(reply)
     }

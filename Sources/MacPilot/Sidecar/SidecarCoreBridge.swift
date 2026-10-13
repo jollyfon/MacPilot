@@ -64,10 +64,16 @@ final class SidecarCoreRuntime: SidecarCoreBridge {
 
     private var managerClass: NSObject.Type?
     private var manager: NSObject?
-    private var didAttemptLoad = false
+    /// `nil` until the framework and the class have both resolved. A failed
+    /// first attempt is retried rather than latched, because a load that lost
+    /// once must not decide the answer for the rest of the process.
+    private var isLoaded: Bool?
+    private var lastVerdict: Bool?
+    /// Support-shaped selectors this build exposes, logged once beside a `no`.
+    private var supportSelectors: [String] = []
     private let log: (String) -> Void
 
-    init(log: @escaping (String) -> Void = { _ in }) {
+    init(log: @escaping (String) -> Void = { remoteControlLog($0) }) {
         self.log = log
     }
 
@@ -75,11 +81,24 @@ final class SidecarCoreRuntime: SidecarCoreBridge {
     /// answers for *right now*: at listener startup, before SidecarCore's own
     /// state has settled, it can say no on a Mac that says yes a minute later,
     /// and a latched no would then hide the Sidecar entry from every phone for
-    /// the rest of the process. Only the `dlopen` is one-shot.
+    /// the rest of the process.
+    ///
+    /// Every change of verdict is logged because a phone's complaint about
+    /// Sidecar is decided here, and `SidecarCore` documents no reason for a
+    /// `no` — without these lines the Mac's own log has nothing to point at.
     var isSupported: Bool {
-        loadIfNeeded()
+        guard loadIfNeeded() else { return false }
         guard let managerClass else { return false }
-        return Self.invokeIsSupported(managerClass)
+        let verdict = Self.invokeIsSupported(managerClass)
+        if verdict != lastVerdict {
+            if verdict {
+                log("sidecar isSupported=true")
+            } else {
+                log("sidecar isSupported=false selectors=[\(supportSelectors.joined(separator: ","))]")
+            }
+            lastVerdict = verdict
+        }
+        return verdict
     }
 
     func currentState() -> SidecarBridgeState {
@@ -104,21 +123,54 @@ final class SidecarCoreRuntime: SidecarCoreBridge {
     /// Deferred to the first question about Sidecar: a Mac whose remote control
     /// is switched off, or a phone that never asks, must not pay for loading a
     /// private framework.
-    private func loadIfNeeded() {
-        guard !didAttemptLoad else { return }
-        didAttemptLoad = true
-        guard dlopen(Self.frameworkPath, RTLD_NOW) != nil,
-              let managerClass = objc_getClass(Self.managerClassName) as? NSObject.Type else {
-            log("sidecar framework unavailable on this macOS build")
-            return
+    ///
+    /// Returns whether the framework and its manager class are both resolved,
+    /// and re-attempts until they are — a failure is reported with `dlerror()`,
+    /// because "the load failed" and "the class did not register" look identical
+    /// from the phone's side, and only one of them is this Mac's fault.
+    @discardableResult
+    private func loadIfNeeded() -> Bool {
+        if let isLoaded { return isLoaded }
+        guard dlopen(Self.frameworkPath, RTLD_NOW) != nil else {
+            log("sidecar framework load failed error=\(String(cString: dlerror()))")
+            return false
+        }
+        guard let managerClass = objc_getClass(Self.managerClassName) as? NSObject.Type else {
+            log("sidecar class \(Self.managerClassName) not registered by \(Self.frameworkPath)")
+            return false
         }
         self.managerClass = managerClass
-        log("sidecar loaded")
+        supportSelectors = Self.supportSelectors(of: managerClass)
+        isLoaded = true
+        log("sidecar loaded isSupported=\(Self.invokeIsSupported(managerClass))")
+        return true
+    }
+
+    /// The `isSupported` selector this build actually has, or the support-shaped
+    /// ones it does have. A missing selector reads as "no" through the optional
+    /// chain below, which is the only failure mode this function can distinguish
+    /// without Apple's headers — so the names go in the log instead.
+    private static func invokeIsSupported(_ managerClass: NSObject.Type) -> Bool {
+        let selector = NSSelectorFromString("isSupported")
+        guard let method = class_getClassMethod(managerClass, selector) else { return false }
+        typealias IsSupportedIMP = @convention(c) (AnyObject, Selector) -> Bool
+        let imp = unsafeBitCast(method_getImplementation(method), to: IsSupportedIMP.self)
+        return imp(managerClass as AnyObject, selector)
+    }
+
+    private static func supportSelectors(of managerClass: NSObject.Type) -> [String] {
+        var count: UInt32 = 0
+        guard let methods = class_copyMethodList(object_getClass(managerClass), &count) else { return [] }
+        defer { methods.deallocate() }
+        return UnsafeBufferPointer(start: methods, count: Int(count))
+            .map { NSStringFromSelector(method_getName($0)) }
+            .filter { $0.contains("upport") || $0.contains("vailab") }
+            .sorted()
     }
 
     /// The singleton is resolved on the first device question, not on the
     /// capability check: creating it starts the framework talking to Rapport,
-    /// and merely advertising `sidecar` in a Bonjour record must not cost that.
+    /// and merely answering a capability question must not cost that.
     private func sharedManager() -> NSObject? {
         loadIfNeeded()
         guard isSupported, let managerClass else { return nil }
@@ -134,14 +186,6 @@ final class SidecarCoreRuntime: SidecarCoreBridge {
         guard let method = class_getClassMethod(managerClass, selector) else { return nil }
         typealias SharedManagerIMP = @convention(c) (AnyObject, Selector) -> NSObject?
         let imp = unsafeBitCast(method_getImplementation(method), to: SharedManagerIMP.self)
-        return imp(managerClass as AnyObject, selector)
-    }
-
-    private static func invokeIsSupported(_ managerClass: NSObject.Type) -> Bool {
-        let selector = NSSelectorFromString("isSupported")
-        guard let method = class_getClassMethod(managerClass, selector) else { return false }
-        typealias IsSupportedIMP = @convention(c) (AnyObject, Selector) -> Bool
-        let imp = unsafeBitCast(method_getImplementation(method), to: IsSupportedIMP.self)
         return imp(managerClass as AnyObject, selector)
     }
 

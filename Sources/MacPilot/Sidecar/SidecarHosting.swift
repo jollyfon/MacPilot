@@ -6,14 +6,16 @@ import MacPilotRemoteProtocol
 /// channel never has to know that a private framework is involved.
 @MainActor
 protocol RemoteSidecarHosting: AnyObject {
-    /// False on a Mac whose SidecarCore reports it cannot drive Sidecar. The
-    /// server withholds the `sidecar` capability in that case, so the phone
-    /// hides the entry instead of offering a control that cannot work.
+    /// False on a Mac whose SidecarCore reports it cannot drive Sidecar right
+    /// now. The `sidecar` capability does not depend on this: the bit says the
+    /// commands are answered, and a Mac that cannot obey says so per request with
+    /// `sidecarUnavailable`, so the phone always gets a sentence rather than
+    /// silence.
     var isRemotelyAvailable: Bool { get }
 
     /// `nil` when this Mac cannot drive Sidecar — the router answers
-    /// `unsupportedCommand`, which is exactly how an older Mac reads to a phone
-    /// that never saw the capability.
+    /// `sidecarUnavailable`, which is this Mac's own verdict rather than the
+    /// message an older Mac that has no Sidecar code at all would send.
     func remoteSnapshot() -> RemoteSidecarSnapshot?
 
     /// Accepted immediately: the returned snapshot carries the operation phase,

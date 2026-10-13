@@ -133,8 +133,8 @@ struct SidecarServiceTests {
         let bridge = StubSidecarBridge(isSupported: false, devices: [Self.ipad])
         let service = makeService(bridge: bridge)
         #expect(!service.isRemotelyAvailable)
-        // The router turns this `nil` into `unsupportedCommand`, which is what
-        // keeps an old phone's unknown-command path from ever being reached.
+        // The router turns this `nil` into `sidecarUnavailable`, the Mac's own
+        // verdict, while a host that is absent entirely stays `unsupportedCommand`.
         #expect(service.remoteSnapshot() == nil)
         #expect(service.remoteConnect(deviceID: Self.ipad.identifier) == .failure(.sidecarUnavailable))
         #expect(service.remoteDisconnect(deviceID: Self.ipad.identifier) == .failure(.sidecarUnavailable))
@@ -516,14 +516,30 @@ struct RemoteSidecarRouterTests {
         }
     }
 
-    @Test func aMacWithoutSidecarAnswersUnsupportedCommand() async {
-        // Both shapes: no host at all, and a host whose framework says this
-        // machine cannot drive Sidecar.
-        for host in [nil as (any RemoteSidecarHosting)?, makeHost(snapshot: nil)] {
+    @Test func aMacWithNoSidecarHostAtAllAnswersUnsupportedCommand() async {
+        // A Mac that has no Sidecar code answers exactly like a Mac that never
+        // got the question — there is nothing behind the command.
+        let response = await makeRouter(sidecar: nil)
+            .response(for: RemoteRequest(command: .getSidecarDevices, sequence: 1), isAuthenticated: true)
+        #expect(!response.success)
+        #expect(response.error?.code == .unsupportedCommand)
+    }
+
+    @Test func aMacThatCannotDriveSidecarAnswersWithItsOwnVerdict() async {
+        // Both shapes of "this Mac says no": the framework's verdict, and a
+        // snapshot that is missing anyway. Neither may read as "no such command"
+        // — a phone that asked a question deserves the Mac's answer to it.
+        let refused = StubSidecarHost(
+            isRemotelyAvailable: false,
+            snapshot: nil,
+            connectOutcome: .failure(.sidecarUnavailable),
+            disconnectOutcome: .failure(.sidecarUnavailable)
+        )
+        for host in [refused as (any RemoteSidecarHosting)?, makeHost(snapshot: nil)] {
             let response = await makeRouter(sidecar: host)
                 .response(for: RemoteRequest(command: .getSidecarDevices, sequence: 1), isAuthenticated: true)
             #expect(!response.success)
-            #expect(response.error?.code == .unsupportedCommand)
+            #expect(response.error?.code == .sidecarUnavailable)
         }
     }
 
@@ -590,5 +606,98 @@ struct RemoteSidecarRouterTests {
         #expect(!response.success)
         #expect(response.error?.code == .sidecarOperationInProgress)
         #expect(response.payload == nil)
+    }
+}
+
+/// The rule that decides whether a phone is allowed to ask at all.
+///
+/// Pinned here because the difference is invisible from one Mac and fatal from
+/// the phone's side: withhold the bit and the Sidecar entry stops working with
+/// no error anywhere, while a phone that can ask always gets an answer.
+@Suite("Sidecar capability advertisement")
+@MainActor
+struct SidecarCapabilityAdvertisementTests {
+    private final class StubHost: RemoteSidecarHosting {
+        var isRemotelyAvailable: Bool
+        init(isRemotelyAvailable: Bool) { self.isRemotelyAvailable = isRemotelyAvailable }
+        func remoteSnapshot() -> RemoteSidecarSnapshot? { nil }
+        func remoteConnect(deviceID: String) -> RemoteSidecarOutcome { .failure(.sidecarUnavailable) }
+        func remoteDisconnect(deviceID: String) -> RemoteSidecarOutcome { .failure(.sidecarUnavailable) }
+    }
+
+    private final class StubDockGroupsHost: RemoteDockGroupsHosting {
+        func remoteSnapshot() async -> RemoteDockGroupsSnapshot? { nil }
+        func remoteLaunch(groupID: String, appID: UUID?) async -> RemoteDockGroupLaunchOutcome { .groupNotFound }
+    }
+
+    private final class Host: RemoteConnectionHost {
+        let screenControl = MacScreenControlService(
+            credentials: ScreenCredentialStore(secretStore: InMemorySecretStore(), log: { _ in }),
+            log: { _ in }
+        )
+        let pairingManager = RemotePairingManager(log: { _ in })
+        let deviceStore = RemoteDeviceStore(
+            keychainService: "com.misswell.macpilot.tests.sidecar-advertisement.\(UUID().uuidString)",
+            secretStore: InMemorySecretStore(),
+            persist: {},
+            log: { _ in }
+        )
+        let inputCoordinator = RemoteInputCoordinator(
+            mouse: FakeMouseInjector(),
+            scroll: FakeScrollInjector(),
+            log: { _ in }
+        )
+        var sidecarHosting: (any RemoteSidecarHosting)?
+        init(sidecarHosting: (any RemoteSidecarHosting)?) { self.sidecarHosting = sidecarHosting }
+
+        func remoteConnection(
+            _ connection: RemoteConnection,
+            didAuthenticate clientID: String,
+            name: String,
+            address: String?
+        ) {}
+        func remoteConnectionDidClose(_ connection: RemoteConnection) {}
+        func remoteLog(_ message: String) {}
+    }
+
+    @Test func aWiredMacAdvertisesSidecarEvenWhileItsFrameworkSaysNo() {
+        // The bit means "these commands are answered", not "this Mac can mirror
+        // right now". A phone that has to wait for the verdict to be true in
+        // order to ask never asks on a Mac whose SidecarCore answered early.
+        let host = Host(sidecarHosting: StubHost(isRemotelyAvailable: false))
+        #expect(host.advertisedCapabilities.contains(.sidecar))
+    }
+
+    @Test func aMacWithoutTheSidecarHostNeverAdvertisesIt() {
+        // An old Mac build, or one with the feature not wired, must never be
+        // handed a command its decoder does not know.
+        #expect(!Host(sidecarHosting: nil).advertisedCapabilities.contains(.sidecar))
+    }
+
+    @Test func theShippingServerAdvertisesEveryHostItWasGiven() {
+        // The production host, read the way a connection reads it. This is the
+        // shape that broke: `sidecarHosting` and `dockGroupsHosting` existed only
+        // as protocol-extension defaults, so `advertisedCapabilities` resolved
+        // them statically and every real server reported `nil` for both — the
+        // phone then withheld the entry and never sent the command, on a Mac that
+        // had the whole feature wired.
+        let server = RemoteControlServer(
+            deviceStore: RemoteDeviceStore(
+                keychainService: "com.misswell.macpilot.tests.sidecar-server.\(UUID().uuidString)",
+                secretStore: InMemorySecretStore(),
+                persist: {},
+                log: { _ in }
+            ),
+            screenControl: MacScreenControlService(
+                credentials: ScreenCredentialStore(secretStore: InMemorySecretStore(), log: { _ in }),
+                log: { _ in }
+            ),
+            dockGroups: StubDockGroupsHost(),
+            sidecar: StubHost(isRemotelyAvailable: true),
+            log: { _ in }
+        )
+        let capabilities = (server as any RemoteConnectionHost).advertisedCapabilities
+        #expect(capabilities.contains(.sidecar))
+        #expect(capabilities.contains(.dockGroups))
     }
 }

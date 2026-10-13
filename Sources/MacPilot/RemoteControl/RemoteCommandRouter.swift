@@ -100,8 +100,15 @@ struct RemoteCommandRouter {
             return await respondToDockGroupLaunch(request, started: started)
 
         case .getSidecarDevices:
-            guard let sidecar, let snapshot = sidecar.remoteSnapshot() else {
+            guard let sidecar else {
                 return failure(for: request, code: .unsupportedCommand)
+            }
+            // A Mac that has the commands but cannot drive Sidecar answers with
+            // its own verdict instead of "unknown command", and logs that the
+            // question arrived — otherwise the phone's refusal has no source.
+            guard sidecar.isRemotelyAvailable, let snapshot = sidecar.remoteSnapshot() else {
+                log("command refused reason=sidecarUnavailable command=\(request.command.rawValue)")
+                return failure(for: request, code: .sidecarUnavailable)
             }
             return payloadResponse(request, started: started, payload: try? snapshot.encoded())
 
