@@ -176,3 +176,16 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - 手机端：build 39 生成项目上 `xcodebuild test -only-testing:MacPilotRemoteTests`（iPhone 17e 模拟器，booted）**65 项 / 12 suites 通过**（`Test run with 65 tests in 12 suites passed`，`** TEST SUCCEEDED **`）。本批 iOS 源码即上一轮做过双重反向对照（默认值改回开启 → 单元 5 红、XCUITest 169/177/181/186/190 行红）的同一内容；`testSidecarRowAppearsOnlyOnceTheUserEnablesIt` 在那一轮 25.264 秒通过。
 - ASC Build ID：`18474352-73f7-428f-8f1e-9a1e481df94d`，`processingState=VALID`，`internalBuildState=IN_BETA_TESTING`，`autoNotifyEnabled=true`，`externalBuildState=READY_FOR_BETA_SUBMISSION`。内部组「内部」（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`，`isInternalGroup=true`、`hasAccessToAllBuilds=true`）自动接收该构建，`asc publish testflight` 因此跳过显式添加。中英文 What to Test 已写入并读回（zh-Hans 448 字、en-US 1164 字）。
 - 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 39 附加到 1.2.3 版本，也未执行 `asc metadata push`。`VALID` 与 `IN_BETA_TESTING` 都不代表 Apple 已审核批准。**真机 iPhone/iPad 上的画面与实际随航连接仍未实测**：默认关闭、开启后入口出现、不支持 Mac 的文案，都是在模拟器 XCUITest 里证明的。
+
+## 2026-10-13（同日稍后）：1.2.3 metadata 推送与构建 39 的外部 Beta Review
+
+上一节记录的是**上传当时**的状态（仅内部组、未推 metadata、未发起外部 Review）。同一轮稍后补上了后两件，App Store Review 仍未提交。
+
+- **前置检查**：`asc versions list --app 6811335132 --platform IOS` 确认 1.2.3 仍是 `PREPARE_FOR_SUBMISSION`（可编辑 train），1.2.2／1.2.1／1.2.0 均为 `READY_FOR_DISTRIBUTION`——已 `READY_FOR_SALE` 的 train 再传会撞 90186/90062。
+- **metadata 推送**：先 `asc metadata push --app 6811335132 --version 1.2.3 --platform IOS --dir metadata --dry-run`，计划为 **2 条 adds（zh-Hans 与 en-US 的 `whatsNew`）、0 updates、0 deletes**，即纯新增、不覆盖任何既有字段；确认后才去掉 `--dry-run` 真跑（未使用 `--allow-deletes`）。
+- **读回判据**：推送后再 dry-run 一次，`adds=0 / updates=0 / deletes=0`。远端读回为空差异才算「推上去了」；仓库里改了 `metadata/version/1.2.3/*.json` 本身不构成证据。
+- **外部组**：`asc testflight groups list` 给出内部组 `dbf86047-0ba9-4944-bc39-7c78e92b0cd8`（`isInternalGroup=true`）与外部组 `bd37fc5a-05d4-4e9c-bff5-510559085da5`（公开链接 `https://testflight.apple.com/join/zMkmV3dh`，`publicLinkEnabled=true`）。
+- **提交 Beta Review**：`asc builds add-groups --build-id 18474352-73f7-428f-8f1e-9a1e481df94d --group bd37fc5a-05d4-4e9c-bff5-510559085da5 --submit --confirm`，返回 added 1 group + submitted。
+- **状态读回**：`asc status --app 6811335132` → `testflight.betaReviewState=WAITING_FOR_REVIEW`、`submittedDate=2026-10-13T07:08:30-07:00`；`appstore.state` 仍是 `PREPARE_FOR_SUBMISSION`，`submission.inFlight=false`。`WAITING_FOR_REVIEW` 只代表排队，**不代表 Apple 已批准**。
+- **未做**：未提交 App Store Review、未新增测试员、未把构建 39 附加到 1.2.3 版本对象、未改签名或 provisioning 设置（本轮 automatic export 正常，无需回到构建 27–34 的手工导出路径）。
+- **装机分布拿不到**：`asc testflight metrics group-testers` 对内部组与外部组都返回 `attributes:null`，`client hello` 日志也不带手机端构建号，因此**无法从服务端证明用户手机上装的是 build 38 还是 39**。要确认只能在手机 TestFlight 上看 `1.2.3 (39)`。真机画面（默认关闭、入口出现、iPad 实际成为扩展显示）仍未实测。

@@ -2059,7 +2059,7 @@ PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac �
 
 **验证。** 协议包 91 个测试全绿（其中 8 个随航专用：三条命令的鉴权要求、快照编解码往返、能力位只向声明者广告、错误码词表冻结）。Mac 侧 `SidecarRemoteTests` 24 个测试 0.26 秒跑完（修掉能力位缓存后加了第 25 个，两个套件同样全绿）；全量 `swift test`（1270 个测试）里两个随航套件同样全部通过——那一轮有个 Snapzy 测试把共享主 actor 占了 82 秒，排在后面的随航测试被推迟到 83.988 秒才结束，**但没有一个失败**，这正是「结论不依赖墙钟」的意义；同一轮里 12 个失败测试全是已知的饿死型 flake，单独 `--filter` 跑那 165 个测试 4 秒全绿。手机端 PilotNest 59 个测试、11 个套件通过，`TEST SUCCEEDED`；把首页显示规则改成跟用户开关走之后是 61 个测试、同样 11 个套件全绿，外加那条 XCUITest（修复后 9.039 秒通过；把 `HomeView` 的过滤器原样加回去做反向对照，它在 27.311 秒失败于 `ControlSectionOrderUITests.swift:164/168`，正是该失败的两行）。真机部分用一个 `/tmp` 下的独立探针（编译同一份 `Sources/MacPilot/Sidecar/` 源码，不碰 MacPilot 本体）在 macOS 27.0.1 + iPad16,1 上跑通：`supported=true`、发现 1 台设备；connect 立刻回 accepted 且诚实地报 `connected=[]`，2.2 秒后由系统的 `connectedDevices` 确认；保持 15 秒后 disconnect 立刻回 `phase=disconnecting` 且 `connected=["iPad"]`，1.2 秒后确认，最终 `connected=[]`。就是这次真机验证抓到了上面那个 `@escaping` 崩溃：第一次运行时探针在发起连接的瞬间 trap，但会话已经起来了——框架调用确实发出去了，只是回调没法安全返回。
 
-## 七十三、随航「扫描不出来」的根因是协议扩展的静态派发，不是 SidecarCore（代码已改，beta.16 尚未发布：GitHub 账号被暂停）
+## 七十三、随航「扫描不出来」的根因是协议扩展的静态派发，不是 SidecarCore（已发布为 beta.18，发布过程见 §七十五）
 
 用户实测：这台 Mac 有随航、旁边就有一台 iPad，手机端点开随航却扫不出来。日志里三条硬证据把范围一下就收窄了——`client hello ... caps=` 里始终没有 `sidecar`；`getSidecarDevices` / `connectSidecar` / `disconnectSidecar` 在整份 Diagnostics.log 里 **0 命中**；同一个用户会话里隔几分钟跑的 `/tmp/sidecar-probe/probe` 打印 `supported=true` 并列出 `iPad16,1`。也就是说框架说这台机器可以，而手机连问都没问过。
 
@@ -2071,13 +2071,13 @@ PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac �
 
 **让下一台机器不必再靠猜。** `SidecarCoreRuntime` 以前默认 `log: { _ in }`，所以整份日志里随航一行都没有；现在默认接上 `remoteControlLog`，`dlopen` 与类查找改成「重试到解析成功为止」并把 `dlerror()` 写进日志，`isSupported` 每次翻转记一行，判为 false 时把 `SidecarDisplayManager` 上含 `upport`/`vailab` 的类方法名一并记下来——`SidecarCore` 不为「no」提供任何理由，没有这几行，一台拒绝的 Mac 事后无从诊断。手机端 `sidecarUnsupported` 的文案跟着改准：「这台 Mac 上的 MacPilot 没有随航功能」，因为在新判据下「没有广告」只剩一个意思——那边的 MacPilot 版本还没有这个功能，而不是机型不支持。
 
-**⚠️ 现在还不能算修好，两件事都没做完。** 一是修复在 Mac 侧，用户的机器要跑到 beta.16 才会真的扫描；二是 **GitHub 账号 `misswell` 当前处于 suspended 状态**，SSH、HTTPS 和 REST 三条路径同样返回「Your account was suspended」/403，所以提交只在本地、没推得动、tag 打不出去、Release 也发不了，`/Applications/MacPilot.app` 仍是 beta.15。手机端 build 39 也**没有**上传：在 Mac 修好之前发一个只改文案的构建，用户装完照样扫不出来，那封 TestFlight 通知只会变成又一次「还是坏的」。账号恢复后要做的顺序是 `git fetch` 对齐（另一个会话已发过 beta.15，本地 ref 停在 `dc28f8f`）、重跑门禁、打 tag、核对 Actions 与 `gh release view`。
+**⚠️ 当时还不能算修好，两件事都没做完。** 一是修复在 Mac 侧，用户的机器要跑到带这个修复的版本才会真的扫描；二是 **GitHub 账号 `misswell` 当时处于 suspended 状态**，SSH、HTTPS 和 REST 三条路径同样返回「Your account was suspended」/403，所以提交只在本地、没推得动、tag 打不出去、Release 也发不了，`/Applications/MacPilot.app` 仍是 beta.15。手机端 build 39 也**没有**上传：在 Mac 修好之前发一个只改文案的构建，用户装完照样扫不出来，那封 TestFlight 通知只会变成又一次「还是坏的」。账号恢复后按这段写的顺序做完了：`git fetch` 对齐（另一个会话已发过 beta.15，本地 ref 停在 `dc28f8f`）、在合并树上重跑门禁、打 tag、核对 Actions 与 `gh release view`；两个 tag 分别落到 beta.18 与 TestFlight build 39，细节与「哪个版本才真的带修复」在 §七十五。
 
 **文案的自动覆盖。** XCUITest 那句 `honestReasons` 是一个「或」列表，而模拟器里工作区永远未连接、渲染的是「连接 Mac 后可以开启随航」那一支——把 `sidecarUnsupported` 换成一句假话，那条 UI 测试照样通过（我做过反向对照，确实没红）。所以真正钉住文案的是新的 `RemoteTextSidecarStringsTests`：`RemoteText` 补上 `AppText` 早就有的显式 `language:` 入口（只看系统 locale 时，缺一条中文会退回英文、看不出问题），测试遍历随航界面渲染的 27 个 key，要求每个都**与英文措辞不同**才算中文表真的写了，另外单独一条断言「没有随航功能」这句话必须点名 Mac 与 MacPilot（责任要说准），最后一条保证 `%@` 替换在两种语言里都成立。反向对照：删掉中文 `sidecarUnsupported` 后 `everySidecarStringIsWrittenInBothLocales` 立刻失败，恢复后 iOS 单元测试 64 个测试、12 个套件全绿。§七十二 里引的那句「这台 Mac 没有提供随航」是改文案之前的原文。
 
 **验证。** `swift test --filter Sidecar` 29 个测试、3 个套件全绿：新增的 `SidecarCapabilityAdvertisementTests` 两条钉住新判据（接了主机就必须广告，哪怕 `isRemotelyAvailable == false`；没接主机就绝不广告），第三条是端到端哨兵——把真的 `RemoteControlServer` 当 `any RemoteConnectionHost` 读 `advertisedCapabilities`，同时断言 `.sidecar` 与 `.dockGroups` 在里面；router 那条旧测试拆成两条，「没有主机」回 `unsupportedCommand`、「有主机但框架说不行」回 `sidecarUnavailable`。反向对照就是修 hook 声明之前那次运行：`aWiredMacAdvertisesSidecarEvenWhileItsFrameworkSaysNo` 当时失败，`#expect` 打印出的数组里确实缺 `.sidecar`，那正是这个 bug 的最小复现。另外 `--filter Remote` 125 个测试、25 个套件全绿，协议包 91 个测试全绿。真机随航路径仍未复测——修复没到用户机器上，而 `SidecarCoreRuntime` 的日志改动只到单元与集成测试为止。
 
-## 七十四、手机端随航改成默认关闭，要用户自己打开（代码已改，仍未发布：GitHub 账号被暂停）
+## 七十四、手机端随航改成默认关闭，要用户自己打开（已发布为 PilotNest build 39，发布过程见 §七十五）
 
 用户要求：手机端的随航功能默认不开启，需要由用户手动开启。改法只有一行——`RemoteControlFeature.isEnabledByDefault` 从 `group != .navigation` 变成 `group != .navigation && self != .sidecar`，随航从此和四个翻页键同属 opt-in。首页那一行是随航的唯一入口（`HomeView` 里 `control.sidecar` → `SidecarDeviceSheet`），所以开关没打开时手机端不留任何随航界面，也不会有任何随航请求出门。
 
@@ -2091,4 +2091,43 @@ PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac �
 
 **顺带发现三条既有失败，与本次改动无关。** 同一个 scheme 里 `testControlCaptionsStayInsideKeysAtLargeTextSizes`、`testControlSelectionPersistsAndHomeMediaLayoutFits`、`testTouchBarAndAllHomeButtonsFitWithoutScrolling` 是红的，红的都是首页 `mediaPlayPause` / `mute` 的 caption 断言；在**改动前**的代码 + 干净模拟器容器上复跑，同样三条以同样的信息失败，所以不是这次带来的。`testConnectionPriorityCanBeReorderedAndPersists` 则是容器/顺序状态相关：脏容器必红，干净容器在这次改动后跑绿。首页媒体键 caption 为什么读不到，需要单独开一轮排查。
 
-**⚠️ 发布状态同 §七十三。** GitHub `misswell` 仍是 suspended，本条也只到本地提交；TestFlight build 39 依旧没上传——Mac 侧的修复还没到用户机器上，先发一个「默认把随航藏起来」的手机版本只会让人以为功能没了。
+**⚠️ 发布状态（原记「同 §七十三：账号 suspended，build 39 未上传」，已过期）。** 账号恢复后这一条落到了两端：Mac 侧 `v1.2.1-beta.18`，手机端 TestFlight **1.2.3 build 39**（同一轮还补上了 1.2.3 的中英文 whatsNew metadata 推送，以及 build 39 的外部组提交与 Beta Review）。当年「先发手机版本只会让人以为功能没了」的顾虑按原计划避开了：两端成套发，Mac 的修复与手机的默认值在同一个合并树里。不过本条预告的「升级后首页那一行会消失、要自己去设置里开」目前**只有 XCUITest 证据**——真机上手机装的是 build 38 还是 39，日志和 ASC 端点都给不出来（`client hello` 不带构建号，`testflight metrics group-testers` 返回 `attributes:null`），所以那句话现在是「预期成立」而不是「已验证」。完整过程、版本对应关系和剩下的验收清单在 §七十五。
+
+## 七十五、静态派发修复随 beta.18 上线，build 39 上了 TestFlight（两端已发布，真机日志出现连接闭环）
+
+**账号恢复，两条卡住的记录一起解锁。** §七十三、§七十四 停在同一扇门上：改动全在本地提交，`misswell` 的 suspended 状态让 SSH、HTTPS、REST 三条路径一起返回 403，推不动也就发不出。恢复后按 §七十三 末尾定好的顺序走了一遍：`git fetch` 对齐远端、在合并树上重跑门禁、打 tag、核对 Actions 与 `gh release view`。`main` 现在推到 `c7a982c`，`origin/main` 与本地一致。
+
+**beta.16 这个版本号永久不存在。** 账号暂停时那个 tag 从没打出去，恢复后本地提交继续往下排，序列于是从 beta.15 直接跳到 beta.17、再到 beta.18。已推送的 tag 不动也不覆盖（发布纪律），所以服务端永远不会有 beta.16 这个 Release。这不影响任何一台机器的升级判断：in-app 更新比较的是版本字符串，一个从没发布过的号不会被任何用户装过。
+
+**第一个真带静态派发修复的 Mac 版本是 beta.18（`c2643a7`），不是 beta.17（`832032a`）——这一句是本轮最容易出错的地方。** 两个 tag 几乎同时发出、`dist` job 同时在跑公证，看起来像同一轮的两次尝试，实际上内容不同：beta.15 落在 `1415f7a`（输入composition后的快捷键），beta.17 是另一个会话在 `832032a` 上打的，比 beta.15 只多两条——`1e69dcd`（跨功能处理器的快捷键派发保持）和 `832032a` 本身（同时检查两个 GitHub 更新仓库），而 `114b505`（把 `dockGroupsHosting`/`sidecarHosting` 提升为 `RemoteConnectionHost` 的协议要求）排在 `832032a` 之后。于是**装 beta.17 的机器上 `sidecar` 依然进不了 `serverHello`**，手机依然会如实显示「这台 Mac 上的 MacPilot 没有随航功能」——那句话在那台机器上是真话，但原因不是机型不行，是那边的版本还没有这个功能。这正是 §七十三 改文案时想要的意思，只是它现在指向的是自家两个相邻 beta。判断某台 Mac 有没有修复，看 `MacPilotVersion` 是否 `>= v1.2.1-beta.18`，或直接在 `Diagnostics.log` 里找 `serverHello` 的 caps 有没有 `sidecar`。
+
+**门禁跑在合并树上，不是分别跑在两个分支上。** `832032a` 与本批五个提交合并之后的树：`--filter Sidecar` 29 项／3 套件、`--filter Remote` 125 项／25 套件、`--filter QuickSearch` 124 项／15 套件、`--filter CarbonHotKey` 3／1、`--filter SoftwareUpdate` 28／4、`ConfigurationSchemaContractTests` 4／1、`ConfigStoreTests` 2／1、协议包 91／16 全绿；`swift build -c release -Xswiftc -warnings-as-errors` 通过（152.68 秒）——这一条按发布纪律必须在打 tag 前跑，因为 CI 的 macOS runner 会把本地缓存构建里只是 warning 的并发诊断升级成 error。手机端 build 39 的生成项目上 `xcodebuild test -only-testing:MacPilotRemoteTests`（iPhone 17e 模拟器）65 项／12 套件全绿。
+
+**TestFlight 侧：1.2.3 build 39 已上传并内部可用。** 上传前先确认 1.2.3 这个 train 还是 `PREPARE_FOR_SUBMISSION`（可编辑）——历史上 1.2.1／1.2.2 各吃过一次 90186/90062，版本一旦 `READY_FOR_SALE` 就再也传不进去，而那两个码是 train 问题、从来不是签名问题。`CURRENT_PROJECT_VERSION` 38 → 39，`MARKETING_VERSION` 保持 1.2.3。最终 IPA 在 `/Users/guofeng/Downloads/PilotNest-1.2.3-39.ipa`，SHA-256 `55ccc50c…`，单一 arm64、无嵌套扩展；验签按 `docs/APP_STORE_RELEASE_CHECKLIST.md` 那套门禁走完：`codesign --verify --deep --strict`、signer leaf `c9f379c6…` 等于 profile 的 `DeveloperCertificates[0]`、`embedded.mobileprovision` 与内层 DER profile 两层 `openssl cms -verify` 都通过，并带了一个翻转字节的篡改对照（同一命令以退出码 4 失败）——`security cms -D` 只解码不验签，没有当作完整性证据用过。ASC Build ID `18474352-73f7-428f-8f1e-9a1e481df94d`，`processingState=VALID`、`internalBuildState=IN_BETA_TESTING`，内部组自动接收；中英文 What to Test 已写入并读回（zh 448 字／en 1164 字）。上传当时**只**分发给内部组，也没有执行 `asc metadata push`；这两件事在同一轮稍后补上了（见下面「ASC 侧补上的两件」）。**App Store Review 始终没有提交**，`VALID` 与 `IN_BETA_TESTING` 都不等于 Apple 已经批准。
+
+**两端必须成套发，这是本轮唯一真正影响用户判断的顺序问题。** 随航这件事的因果是跨端的：Mac 决定能不能被驱动，手机决定问不问。手机单方面上线只会把「扫描不出来」变成「入口不见了」，Mac 单方面上线则让已经打开开关的用户对着一个仍然空的列表。所以这一轮的顺序是：Mac 的修复与手机的默认值先进同一个合并树，再同时发出 beta.18 与 build 39，中间不插入一个只有手机动了的构建。同理，`/Applications/MacPilot.app` 本机安装按发布纪律保持不动，升级由用户自己走 in-app 更新——那条路依赖三处门禁校验的 designated requirement 字节一致，而 CI 跑过不等于发出去的包就是那个包——已发布的资产要自己再验一遍。
+
+**已发布产物的独立复核。** Release `v1.2.1-beta.18` 存在且 `prerelease=true`，四个资产齐（arm64 ZIP／x86_64 ZIP／DMG／compatibility manifest）；`dist` job 成功，日志里两架构 ZIP 与通用 ZIP、DMG 各自都有一行 `Signing requirement OK: identifier "com.misswell.macpilot" and anchor apple generic and certificate leaf[subject.OU] = U8U443D7ZL`，公证四次全部 `status: Accepted`，`gh release create` 带的是 `--verify-tag --prerelease --latest=false`（beta 不抢 Latest 指针）。DMG 那次 `stapler` 第一回因为 `NSURLError -1005` 网络断开失败，脚本按 1／3 重试后 staple + validate 都 worked——**这种一次性网络抖动如果被当成签名缺陷去改签名流程，就会违反「never weaken the requirement to make a build pass」**。本地另做一遍：把 arm64 ZIP 从现网下下来，SHA-256 与 GitHub 声明的摘要逐字节相同（`90b47215…`），`unzip -t` 无错，`codesign --verify --deep --strict` 给 `valid on disk` + `satisfies its Designated Requirement`，`flags=0x10000(runtime)`（Hardened Runtime 在）、`Authority=Developer ID Application: Guofeng Liu (U8U443D7ZL)`，`xcrun stapler validate` worked，仓库自己的 `Scripts/verify-signing-requirement.sh` 对 ZIP 与对本机 `/Applications/MacPilot.app` 都返回 OK——**这就是「已装 beta.15 的机器能接受 beta.18 包」的证据**，因为现装的 App 与发布包带的是同一串 requirement。清单也读回来了：`configSchemaVersion=26`、`minimumReadableConfigSchema=20`，升降级窗口按配置兼容不变量声明着。顺带一条：`SoftwareUpdate.decodeGitHubAssetsHTML` 那条 HTML 兜底路径第 86 行要求 `!version.isPrerelease`，所以 beta 频道只能走 API 那条，两条路对资产名的期望都是 `MacPilot-<version>-<arch>-macos.zip`，与发布的文件名一致。
+
+**ASC 侧补上的两件。** 一是 `asc metadata push --app 6811335132 --version 1.2.3 --platform IOS --dir metadata`：先跑 `--dry-run`，计划里**只有 2 条 adds**（zh-Hans 与 en-US 的 `whatsNew`）、0 updates 0 deletes，确认不会覆盖别的字段才真跑；跑完再 dry-run 一次，adds/updates/deletes 全部归零，这才是「推上去了」的判据。这也证实 §七十四 当时那句「1.2.3 的 whatsNew 已按新路径改写」确实只停在仓库里——**文件改了不等于线上改了**，App Store 文案得看远端读回。二是 build 39 进外部组并提交 Beta Review：`asc builds add-groups --build-id 18474352-… --group bd37fc5a-05d4-4e9c-bff5-510559085da5 --submit --confirm`，读回 `asc status` 给 `testflight.betaReviewState=WAITING_FOR_REVIEW`（提交时间 2026-10-13T07:08:30-07:00）。外部组「外部」的公开链接仍是 `https://testflight.apple.com/join/zMkmV3dh`；1.2.3 版本本体仍是 `PREPARE_FOR_SUBMISSION`，**没有**向 App Store Review 提交。同样按纪律记住：`WAITING_FOR_REVIEW` 只是排队，不是 Apple 批了。
+
+**真机这一环在日志里自己完成了。** 本机 `/Applications/MacPilot.app` 由用户自己在 22:02 升级到 `1.2.1-beta.18` 并重启（不是我动的——发布纪律明确禁止我替换或重启本机安装），而 `~/Library/Logs/MacPilot/Diagnostics.log` 从那一刻起给出了 §七十三 反面的全部证据：
+
+- `client hello name=iPhone paired=true advertised=displayOff,dockGroups,…,sidecar,… caps=…,sidecar,…` ——**`sidecar` 与 `dockGroups` 同时出现在广告集合里**，正是协议要求提升之后才有的结果。
+- `sidecar loaded isSupported=true` 与 `sidecar isSupported=true` 各一行——修复前这两行根本没机会被问，因为主机从没接上。
+- `getSidecarDevices` 今天全天 **36 次命中，全部落在 22:02 之后**，升级前一次都没有；这就是 §七十三 里「整份日志 0 命中」的直接反证，命令终于出门了。
+- 两次完整的连接闭环：22:02:27 `connectSidecar` → `operation started intent=connecting device=A2104C48-…` → `connectToDevice:completion:` → 3.2 秒后 `connecting confirmed by the system`；22:02:46 `disconnectSidecar` → `disconnectFromDevice:completion:` → 0.2 秒后 `disconnecting confirmed by the system`。22:03:49–22:03:58 同一台设备再来一遍，**说明可重复，不是撞上一次的巧合**。
+- 轮询节奏与披露给用户的说明一致（面板静止约每 3 秒一次），首次 `getSidecarDevices` 延迟 78ms、之后 0–2ms——框架冷启动的代价只落在第一次。
+
+**⚠️ 但不要把这条当成验收全部通过，日志有两处它给不出的东西。** 一是**手机装的是哪个构建**：`client hello` 只带 `name=iPhone`，没有构建号，而 `asc testflight metrics group-testers`（内部组和外部组都试了）对两个组都返回 `attributes:null`，Apple 这个端点此刻给不出装机分布。手机会发 `getSidecarDevices` 并不能区分 build 38 和 39——build 38 是默认开启、beta.18 一广告能力它就自己冒出来。要确认得在手机上看 TestFlight 里那一格是不是 `1.2.3 (39)`，或在 App Store Connect 的用户与访问里看安装数。二是**iPad 那边真的亮起了扩展屏**：日志能证明系统确认了连接与断开，但屏幕是否真的成为 Mac 的第二显示只有人在旁边看得见。另外「设置里打开开关后入口才出现」这条 §七十四 的规则，在真机画面上仍然只有 XCUITest 证据。所以下面这个清单才是剩下的活：
+
+**剩下的真机验收清单（只有你能勾）。**
+
+1. **先确认手机装的是哪个构建**：TestFlight › PilotNest 那一格是不是 `1.2.3 (39)`，或 App Store Connect › 用户和访问里的安装数。这一条不对，后面几条的证明力全部归零——build 38 在 beta.18 开始广告之后同样会发 `getSidecarDevices`。
+2. **默认关闭**：全新安装（或把「设置 › 控制功能 › 屏幕操作 › 随航」关掉）之后，首页不该有那一行。已经装过 build 38 的人升级上来会看到它消失一次，那是 §七十四 预告过的后果，不是回归。
+3. **打开开关 → 入口出现 → 扫出设备**：拨开开关，首页出现那一行，点进去列表里要有那台 iPad。Mac 侧对应的证据已经在日志里（`getSidecarDevices` + `isSupported=true`），缺的是手机屏幕上真的列出来了。
+4. **连接与断开，以 iPad 为准**：点连接之后 **iPad 真的变成 Mac 的扩展显示**，断开之后恢复。日志里那句 `connecting confirmed by the system` 只证明系统接受了会话，证明不了屏幕上真的有东西。
+5. **反向对照（这条最值钱）**：把那台 Mac 退回 beta.17 或任何不带 `114b505` 的版本，手机保持开关打开——那一行**仍然在**，点进去给「这台 Mac 上的 MacPilot 没有随航功能」。这一条同时验掉 §七十二 的显示规则（入口不替用户消失）和 §七十三 的文案（责任点准是 Mac 上的版本，不是机型），而 beta.17 和 beta.18 正好是现成的两个相邻版本。
+6. **降级兼容**：关掉随航开关后 `remoteControl.hiddenFeatures` 里出现 `sidecar`——这是 §七十四 白拿的那条，真机验证要么导出配置看一眼，要么实际降级一次。
+
+1–4 勾完，「扫描不出来」这个用户报告就可以正式结案；5 和 6 缺任何一个，剩下的都只是「代码里应该有」。顺带把 §七十二 末尾那句 ⚠️（「改动在真 iPhone 画面上还没看过，要等下一个 TestFlight 构建」）也一并结掉——那个构建就是 build 39，它已经发出去了，等的只剩看。
