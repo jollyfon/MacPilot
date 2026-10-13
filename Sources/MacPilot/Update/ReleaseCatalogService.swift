@@ -5,7 +5,7 @@ import Foundation
 /// historical release" — compatibility unknown, never guessed. While a load is
 /// still in flight, `nil` can also mean "manifest not fetched yet"; entries are
 /// patched in place as the manifests arrive.
-struct CatalogRelease: Identifiable, Equatable {
+struct CatalogRelease: Identifiable, Equatable, Sendable {
     let release: SoftwareRelease
     let compatibility: ReleaseCompatibility?
 
@@ -76,6 +76,7 @@ final class ReleaseCatalogService: ObservableObject {
     private let session: URLSession
     private let currentVersion: String
     private let architecture: AppArchitecture
+    private let repositories: [String]
     private let now: () -> Date
     /// Injectable transport so tests stay deterministic without real network.
     /// `@Sendable` because compatibility manifests are fetched from detached
@@ -83,17 +84,20 @@ final class ReleaseCatalogService: ObservableObject {
     private let performRequest: @Sendable (URLRequest) async throws -> (Data, URLResponse)
     private var cache: VersionCatalog?
     private var loadTask: Task<Void, Never>?
+    private var entriesByRepository: [String: [CatalogRelease]] = [:]
 
     init(
         session: URLSession = .shared,
         currentVersion: String = AppVersionInfo.current().version,
         architecture: AppArchitecture = .current,
+        repositories: [String] = AppIdentity.updateRepositories,
         now: @escaping () -> Date = Date.init,
         performRequest: (@Sendable (URLRequest) async throws -> (Data, URLResponse))? = nil
     ) {
         self.session = session
         self.currentVersion = currentVersion
         self.architecture = architecture
+        self.repositories = repositories
         self.now = now
         self.performRequest = performRequest ?? { request in
             try await session.data(for: request)
@@ -132,17 +136,32 @@ final class ReleaseCatalogService: ObservableObject {
     }
 
     private func fetchCatalog() async throws -> VersionCatalog {
+        entriesByRepository = [:]
+        _ = try await ReleaseFetcher.queryRepositories(repositories) { [self] repository in
+            do {
+                return try await fetchCatalog(repository: repository)
+            } catch {
+                await discardRepository(repository)
+                throw error
+            }
+        }
+        return VersionCatalog(releases: mergedEntries(), fetchedAt: now())
+    }
+
+    private func fetchCatalog(repository: String) async throws -> [CatalogRelease] {
         var entries: [CatalogRelease] = []
         var page = 1
         while true {
-            let (responses, hasNextPage) = try await fetchReleasesPage(page)
+            try Task.checkCancellation()
+            let (responses, hasNextPage) = try await fetchReleasesPage(page, repository: repository)
             let fresh = installableEntries(from: responses)
             // 兼容性清单尚未拉取，先按"未知"上架：首屏不等所有分页和清单。
             let baseIndex = entries.count
             entries += fresh.map(\.entry)
-            publish(entries)
+            publish(entries, repository: repository)
             entries = await attachCompatibility(
                 to: entries,
+                repository: repository,
                 pairs: fresh.enumerated().map { pair in
                     (index: baseIndex + pair.offset, response: pair.element.response)
                 }
@@ -150,15 +169,31 @@ final class ReleaseCatalogService: ObservableObject {
             guard hasNextPage else { break }
             page += 1
         }
-        return VersionCatalog(releases: entries, fetchedAt: now())
+        return entries
     }
 
-    private func publish(_ entries: [CatalogRelease]) {
-        state = .loaded(VersionCatalog(releases: entries, fetchedAt: now()))
+    private func mergedEntries() -> [CatalogRelease] {
+        var releases: [SoftwareVersion: CatalogRelease] = [:]
+        for repository in repositories {
+            for entry in entriesByRepository[repository] ?? [] where releases[entry.release.version] == nil {
+                releases[entry.release.version] = entry
+            }
+        }
+        return Array(releases.values)
     }
 
-    private func fetchReleasesPage(_ page: Int) async throws -> (responses: [GitHubReleaseResponse], hasNextPage: Bool) {
-        let url = URL(string: "https://api.github.com/repos/\(AppIdentity.githubRepository)/releases?per_page=100&page=\(page)")!
+    private func publish(_ entries: [CatalogRelease], repository: String) {
+        entriesByRepository[repository] = entries
+        state = .loaded(VersionCatalog(releases: mergedEntries(), fetchedAt: now()))
+    }
+
+    private func discardRepository(_ repository: String) {
+        entriesByRepository.removeValue(forKey: repository)
+        state = .loaded(VersionCatalog(releases: mergedEntries(), fetchedAt: now()))
+    }
+
+    private func fetchReleasesPage(_ page: Int, repository: String) async throws -> (responses: [GitHubReleaseResponse], hasNextPage: Bool) {
+        let url = URL(string: "https://api.github.com/repos/\(repository)/releases?per_page=100&page=\(page)")!
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -201,6 +236,7 @@ final class ReleaseCatalogService: ObservableObject {
     /// fill in while the user is already reading the list.
     private func attachCompatibility(
         to entries: [CatalogRelease],
+        repository: String,
         pairs: [(index: Int, response: GitHubReleaseResponse)]
     ) async -> [CatalogRelease] {
         var patched = entries
@@ -233,7 +269,7 @@ final class ReleaseCatalogService: ObservableObject {
                 patched[piece.index] = patched[piece.index].withCompatibility(manifest)
                 changed = true
             }
-            if changed { publish(patched) }
+            if changed { publish(patched, repository: repository) }
         }
         return patched
     }

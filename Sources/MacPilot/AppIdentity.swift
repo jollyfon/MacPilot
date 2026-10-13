@@ -1,6 +1,6 @@
 import Foundation
 
-enum AppArchitecture: String, CaseIterable {
+enum AppArchitecture: String, CaseIterable, Sendable {
     case arm64
     case x86_64
 
@@ -21,6 +21,7 @@ enum AppIdentity {
     static let legacyBundleIdentifier = "com.misswell.octopilot"
     static let githubRepository = "misswell/MacPilot"
     static let githubURL = URL(string: "https://github.com/\(githubRepository)")!
+    static let updateRepositories = [githubRepository, "jollyfon/MacPilot"]
 
     static let appBundleName = "MacPilot.app"
     static let legacyAppBundleName = "OctoPilot.app"

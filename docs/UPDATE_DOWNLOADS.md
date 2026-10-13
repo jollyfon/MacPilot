@@ -1,8 +1,14 @@
 # 更新包下载源
 
+## 两个发布仓库
+
+更新检查和版本管理同时查询 `misswell/MacPilot` 与 `jollyfon/MacPilot`。两个仓库独立分页并并发查询；一个来源不可用时使用另一个成功来源，全部失败才报告检查失败。取消检查会停止所有来源。自动更新从成功来源中选择当前 Stable/Beta 通道的最高 SemVer，仍然只安装比当前版本新的版本。版本管理合并并去重相同版本，保留逐页显示和兼容性清单加载；相同版本优先使用旧仓库的有效记录。
+
+两个仓库的安装包都使用以下下载镜像和签名校验。项目主页链接仍为原仓库，不影响新增发布来源。
+
 MacPilot 下载本项目 GitHub Release 安装包时，按以下顺序尝试：
 
-1. Xget：`https://xget.xi-xu.me/gh/misswell/MacPilot/releases/download/...`
+1. Xget：`https://xget.xi-xu.me/gh/<发布仓库>/releases/download/...`
 2. GHFast：`https://ghfast.top/https://github.com/...`
 3. GH-Proxy：`https://gh-proxy.org/https://github.com/...`
 4. GitHub 原始下载地址（最终兜底）。
@@ -20,7 +26,7 @@ GH-Proxy 地址规则：https://gh-proxy.com/docs/github-accelerator
 
 设置 → 软件更新中选择更新通道。正式安装和缺少 `updateChannel` 的旧配置均使用 Stable；纯 Debug 新配置默认 Beta。启用 Beta 需要确认，切回 Stable 不需要确认。About/设置版本区域显示的是安装包通道，与订阅偏好分开。
 
-Stable 使用 GitHub `/releases/latest`，拒绝 draft、prerelease 及预发布版本标签。Beta 分页读取 `/releases`，只选 `prerelease=true`、`-beta.N` 且存在适配 CPU 的校验安装包的最高 SemVer。没有 Beta 时显示已是最新版本。目标版本小于或等于当前版本均不提示更新；Beta 切回 Stable 后须等更高的正式版，不自动降级。切换通道会清除旧结果，正在进行的旧查询不会覆盖新通道结果。Beta API 限流会报错，不回退到 Stable 网页。
+Stable 使用各仓库的 GitHub `/releases/latest`，拒绝 draft、prerelease 及预发布版本标签；API 限流时尝试同一仓库的公开发布网页。Beta 分页读取各仓库的 `/releases`，只选 `prerelease=true`、`-beta.N` 且存在适配 CPU 的校验安装包的最高 SemVer。成功来源没有 Beta 时显示已是最新版本。目标版本小于或等于当前版本均不提示更新；Beta 切回 Stable 后须等更高的正式版，不自动降级。切换通道会清除旧结果，正在进行的旧查询不会覆盖新通道结果。Beta API 限流时尝试另一个仓库，不回退到 Stable 网页。
 
 **自动更新永远只向前；只有版本管理（用户明确选择目标版本）才允许降级。**
 

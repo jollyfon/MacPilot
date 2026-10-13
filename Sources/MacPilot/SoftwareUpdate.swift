@@ -14,7 +14,7 @@ enum InstallationIntent: String, Codable, Equatable, Sendable {
     case configurationRestore
 }
 
-struct SoftwareRelease: Equatable {
+struct SoftwareRelease: Equatable, Sendable {
     let version: SoftwareVersion
     let releaseNotes: String
     let archiveURL: URL
@@ -136,8 +136,8 @@ enum SoftwareUpdateError: Error, Equatable {
     case commandFailed(String)
 }
 
-struct GitHubReleaseResponse: Decodable {
-    struct Asset: Decodable {
+struct GitHubReleaseResponse: Decodable, Sendable {
+    struct Asset: Decodable, Sendable {
         let name: String
         let url: URL
         let digest: String?
@@ -375,50 +375,11 @@ final class SoftwareUpdater: ObservableObject {
     }
 
     private func fetchLatestRelease(channel: AppChannel) async throws -> SoftwareRelease? {
-        if channel == .beta {
-            return try await ReleaseFetcher.fetchBeta(session: session, currentVersion: currentVersion)
-        }
-        var request = URLRequest(url: Self.latestReleaseURL)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("MacPilot/\(currentVersion)", forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 20
-        let (data, response) = try await session.data(for: request)
-        guard let statusCode = (response as? HTTPURLResponse)?.statusCode else {
-            throw SoftwareUpdateError.invalidResponse
-        }
-        if statusCode == 403 {
-            return try await fetchLatestReleaseFromWeb()
-        }
-        guard statusCode == 200 else {
-            throw SoftwareUpdateError.invalidResponse
-        }
-        return try SoftwareRelease.decodeGitHubResponse(data)
-    }
-
-    private func fetchLatestReleaseFromWeb() async throws -> SoftwareRelease {
-        var latestRequest = URLRequest(url: Self.latestReleasePageURL)
-        latestRequest.setValue("MacPilot/\(currentVersion)", forHTTPHeaderField: "User-Agent")
-        latestRequest.timeoutInterval = 20
-        let (_, latestResponse) = try await session.data(for: latestRequest)
-        guard (latestResponse as? HTTPURLResponse)?.statusCode == 200,
-              let finalURL = latestResponse.url,
-              let tagName = finalURL.pathComponents.last,
-              !tagName.isEmpty,
-              tagName != "latest" else {
-            throw SoftwareUpdateError.invalidResponse
-        }
-
-        guard let assetsURL = URL(string: "https://github.com/\(AppIdentity.githubRepository)/releases/expanded_assets/\(tagName)") else {
-            throw SoftwareUpdateError.invalidResponse
-        }
-        var assetsRequest = URLRequest(url: assetsURL)
-        assetsRequest.setValue("MacPilot/\(currentVersion)", forHTTPHeaderField: "User-Agent")
-        assetsRequest.timeoutInterval = 20
-        let (assetsData, assetsResponse) = try await session.data(for: assetsRequest)
-        guard (assetsResponse as? HTTPURLResponse)?.statusCode == 200 else {
-            throw SoftwareUpdateError.invalidResponse
-        }
-        return try SoftwareRelease.decodeGitHubAssetsHTML(assetsData, tagName: tagName)
+        try await ReleaseFetcher.fetchLatest(
+            channel: channel,
+            session: session,
+            currentVersion: currentVersion
+        )
     }
 
     /// Launches MacPilotUpdater for an already validated package. When
@@ -510,7 +471,9 @@ enum UpdateArchiveDownloader {
     static func sources(for original: URL, preferredHost: String? = nil) -> [URL] {
         guard original.scheme == "https", original.host == "github.com",
               original.user == nil, original.password == nil, original.port == nil,
-              original.path.hasPrefix("/\(AppIdentity.githubRepository)/releases/download/"),
+              AppIdentity.updateRepositories.contains(where: {
+                  original.path.hasPrefix("/\($0)/releases/download/")
+              }),
               var mirror = URLComponents(url: original, resolvingAgainstBaseURL: false) else {
             return [original]
         }
