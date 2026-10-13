@@ -96,7 +96,7 @@ final class ClipboardHotKeyCenter {
 }
 
 @MainActor
-private final class ClipboardHotKeyContext {
+final class ClipboardHotKeyContext {
     let onToggle: () -> Void
 
     init(onToggle: @escaping () -> Void) {
@@ -104,12 +104,12 @@ private final class ClipboardHotKeyContext {
     }
 }
 
-private func clipboardHotKeyEventHandler(
+func clipboardHotKeyEventHandler(
     _ callRef: EventHandlerCallRef?,
     _ event: EventRef?,
     _ userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
-    guard let event, let userData else { return noErr }
+    guard let event, let userData else { return OSStatus(eventNotHandledErr) }
     let context = Unmanaged<ClipboardHotKeyContext>
         .fromOpaque(userData)
         .takeUnretainedValue()
@@ -126,7 +126,9 @@ private func clipboardHotKeyEventHandler(
     guard status == noErr,
           hotKeyID.signature == ClipboardHotKeyCenter.hotKeySignature,
           hotKeyID.id == ClipboardHotKeyCenter.hotKeyIdentifier else {
-        return status == noErr ? noErr : status
+        // Carbon stops dispatching after noErr. Leave other features' hot
+        // keys in the handler chain so their registered callback can run.
+        return status == noErr ? OSStatus(eventNotHandledErr) : status
     }
     Task { @MainActor in
         context.onToggle()

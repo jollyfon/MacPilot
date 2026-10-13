@@ -40,7 +40,7 @@ func screenRecordingCarbonEventHandler(
     _ event: EventRef?,
     _ userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
-    guard let event, let userData else { return noErr }
+    guard let event, let userData else { return OSStatus(eventNotHandledErr) }
     let context = Unmanaged<ScreenRecordingShortcutContext>
         .fromOpaque(userData)
         .takeUnretainedValue()
@@ -56,7 +56,7 @@ func screenRecordingCarbonEventHandler(
     )
     guard status == noErr,
           hotKeyID.signature == ScreenRecordingCarbonHotKey.signature else {
-        return status == noErr ? noErr : status
+        return status == noErr ? OSStatus(eventNotHandledErr) : status
     }
     Task { @MainActor in context.model?.handleHotKey(index: Int(hotKeyID.id)) }
     return noErr

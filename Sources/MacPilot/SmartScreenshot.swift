@@ -1093,7 +1093,7 @@ private func smartShortcutCarbonEventHandler(
     _ event: EventRef?,
     _ userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
-    guard let event, let userData else { return noErr }
+    guard let event, let userData else { return OSStatus(eventNotHandledErr) }
     let context = Unmanaged<SmartShortcutContext>.fromOpaque(userData).takeUnretainedValue()
     var hotKeyID = EventHotKeyID()
     let status = GetEventParameter(
@@ -1107,7 +1107,7 @@ private func smartShortcutCarbonEventHandler(
     )
     guard status == noErr,
           hotKeyID.signature == SmartCaptureCarbonHotKey.signature
-    else { return status == noErr ? noErr : status }
+    else { return status == noErr ? OSStatus(eventNotHandledErr) : status }
 
     // Carbon delivers application hot-key events on the main run loop.  Do
     // not enqueue the first event behind launch-time MainActor work: that can
