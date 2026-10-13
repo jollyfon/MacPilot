@@ -145,3 +145,17 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - 中英文 What to Test 已写入并读回（zh-Hans 370 字、en-US 1029 字），内容为随航的测试要点而非营销文案。
 - Canonical `metadata/version/1.2.3/{en-US,zh-Hans}.json` 已按 1.2.2 沿用 description/keywords/marketing/support URL 并新写 `whatsNew`；`asc metadata validate` 为 0 errors / 0 warnings。**未执行 `asc metadata push`**，ASC 上 1.2.3 的 `whatsNew` 仍为空。
 - 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 37 附加到 1.2.3 版本。`VALID` 与 `IN_BETA_TESTING` 都不代表 Apple 已审核批准。
+
+## 2026-10-13：1.2.3 / 构建 38 TestFlight 内部分发
+
+- 目的是把「首页随航行跟着用户开关走」的改动发到手机。上传前 `asc versions list` 确认 **1.2.3 仍为 `PREPARE_FOR_SUBMISSION`**（train 可编辑），`project.yml` 的 `CURRENT_PROJECT_VERSION` 37 → 38、`MARKETING_VERSION` 保持 1.2.3；`xcodegen generate` 后生成项目仍是 `CODE_SIGN_STYLE=Automatic`、`DEVELOPMENT_TEAM=U8U443D7ZL`，没有固定任何 profile UUID。
+- 最终 IPA：`/Users/guofeng/Downloads/PilotNest-1.2.3-38.ipa`（2,488,379 字节）；bundle `com.misswell.macpilot.remote`，版本/构建号 `1.2.3 (38)`，Team `U8U443D7ZL`，`MinimumOSVersion=17.0`，`ITSAppUsesNonExemptEncryption=false`。单一 arm64 二进制，无嵌套扩展或 framework。`unzip -t` 无错误。
+- IPA SHA-256：`8b5c1682cd4fd04b94285fcfe2429022ee9aaaa619935a5d79d49861cd2a204e`。
+- `codesign --verify --deep --strict`：`valid on disk` + `satisfies its Designated Requirement`；`Authority=Apple Distribution: Guofeng Liu (U8U443D7ZL)`，`TeamIdentifier=U8U443D7ZL`。
+- Signer leaf DER SHA-256：`c9f379c6ec0ebf40e7fd5c3034849bc40b466c3ab78a595b3de09f81d2d17040`，serial `7A601D1A847C8DD6EC50DBE3A7CECACC`，有效期 2026-09-06 → 2027-09-06。它等于 profile 的 `DeveloperCertificates[0]`（该 profile 共 3 张证书：`c9f379c6…`、`62e7580e…`、`d6c4e2d8…`）；与构建 37 是同一张分发证书。
+- Profile：UUID `b6b2e034-9cf1-4475-8cc9-dda1fff53fe7`，名称 `iOS Team Store Provisioning Profile: com.misswell.macpilot.remote`，`IsXcodeManaged=true`，创建 2026-09-12，有效至 2027-09-06。签名 entitlements 四项（`application-identifier`、`beta-reports-active=true`、`com.apple.developer.team-identifier`、`get-task-allow=false`）全部是 profile `Entitlements` 的子集且取值一致；顶层无 `ProvisionedDevices`、无 `ProvisionsAllDevices`。
+- App Store 类型的密码学证明分两层，都要验：外层 `embedded.mobileprovision` 用 `openssl cms -verify -inform DER -CAfile <SystemRootCertificates 里的 Apple Root CA> -purpose any` 返回 **CMS Verification successful**；其认证内容里的 `DER-Encoded-Profile`（`plutil -extract … raw` 给出的是单行 base64，必须用 `openssl base64 -d -A`，默认的 MIME 模式会静默产出 0 字节）再验一次同样 successful，而这段**已认证字节**中 `ProfileDistributionType=STORE`。反向对照：把 profile 中间一个字节改成 `0x41`，外层同一命令报 `CMS_SignerInfo_verify_content: verification failure`——所以这个检查真的有牙。`security cms -D` 依旧只解码不验签，不能当完整性证据。
+- 二进制内容确认：Sidecar 相关字符串 109 处；新文案按 UTF-8 字节搜索各命中 1 处（`这台 Mac 没有提供随航。`、`重新连接后会再问一次`、`This Mac does not offer Sidecar.`）。注意 `strings -a` 只提取 ASCII 序列，用它找中文必然 0 命中，不能据此断言文案缺失。
+- 本轮代码与提交 `e38749b` 完全相同，只增构建号；那一轮的验证是 iOS 61 项 / 11 suites 全绿，XCUITest `testSidecarRowStaysOnTheHomePageAndNamesWhyItCannotRun` 9.039 秒通过，且把 `HomeView` 的旧过滤器加回去后它在 27.311 秒失败于 `ControlSectionOrderUITests.swift:164/168`。
+- ASC Build ID：`b40ef635-2a63-4a1f-b327-2fd87431bc13`，`processingState=VALID`，`internalBuildState=IN_BETA_TESTING`，`autoNotifyEnabled=true`，`externalBuildState=READY_FOR_BETA_SUBMISSION`。内部组「内部」（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`，`isInternalGroup=true`、`hasAccessToAllBuilds=true`）自动接收该构建，`asc publish testflight` 因此跳过显式添加。中英文 What to Test 已写入并读回（zh-Hans 551 字、en-US 1446 字）。
+- 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 38 附加到 1.2.3 版本，也未执行 `asc metadata push`。`VALID` 与 `IN_BETA_TESTING` 都不代表 Apple 已审核批准。**真机 iPhone 上的画面仍未实测**：显示规则与那一屏文案是在模拟器 XCUITest 里证明的。
