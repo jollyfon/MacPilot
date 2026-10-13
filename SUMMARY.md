@@ -2076,3 +2076,19 @@ PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac �
 **文案的自动覆盖。** XCUITest 那句 `honestReasons` 是一个「或」列表，而模拟器里工作区永远未连接、渲染的是「连接 Mac 后可以开启随航」那一支——把 `sidecarUnsupported` 换成一句假话，那条 UI 测试照样通过（我做过反向对照，确实没红）。所以真正钉住文案的是新的 `RemoteTextSidecarStringsTests`：`RemoteText` 补上 `AppText` 早就有的显式 `language:` 入口（只看系统 locale 时，缺一条中文会退回英文、看不出问题），测试遍历随航界面渲染的 27 个 key，要求每个都**与英文措辞不同**才算中文表真的写了，另外单独一条断言「没有随航功能」这句话必须点名 Mac 与 MacPilot（责任要说准），最后一条保证 `%@` 替换在两种语言里都成立。反向对照：删掉中文 `sidecarUnsupported` 后 `everySidecarStringIsWrittenInBothLocales` 立刻失败，恢复后 iOS 单元测试 64 个测试、12 个套件全绿。§七十二 里引的那句「这台 Mac 没有提供随航」是改文案之前的原文。
 
 **验证。** `swift test --filter Sidecar` 29 个测试、3 个套件全绿：新增的 `SidecarCapabilityAdvertisementTests` 两条钉住新判据（接了主机就必须广告，哪怕 `isRemotelyAvailable == false`；没接主机就绝不广告），第三条是端到端哨兵——把真的 `RemoteControlServer` 当 `any RemoteConnectionHost` 读 `advertisedCapabilities`，同时断言 `.sidecar` 与 `.dockGroups` 在里面；router 那条旧测试拆成两条，「没有主机」回 `unsupportedCommand`、「有主机但框架说不行」回 `sidecarUnavailable`。反向对照就是修 hook 声明之前那次运行：`aWiredMacAdvertisesSidecarEvenWhileItsFrameworkSaysNo` 当时失败，`#expect` 打印出的数组里确实缺 `.sidecar`，那正是这个 bug 的最小复现。另外 `--filter Remote` 125 个测试、25 个套件全绿，协议包 91 个测试全绿。真机随航路径仍未复测——修复没到用户机器上，而 `SidecarCoreRuntime` 的日志改动只到单元与集成测试为止。
+
+## 七十四、手机端随航改成默认关闭，要用户自己打开（代码已改，仍未发布：GitHub 账号被暂停）
+
+用户要求：手机端的随航功能默认不开启，需要由用户手动开启。改法只有一行——`RemoteControlFeature.isEnabledByDefault` 从 `group != .navigation` 变成 `group != .navigation && self != .sidecar`，随航从此和四个翻页键同属 opt-in。首页那一行是随航的唯一入口（`HomeView` 里 `control.sidecar` → `SidecarDeviceSheet`），所以开关没打开时手机端不留任何随航界面，也不会有任何随航请求出门。
+
+**这与 §七十二 不是互相打脸。** §七十二 立的是「用户亲手打开的开关，界面不能替他消失」；这一条立的是「没打开过的，不能替他打开」。镜像一整个 iPad 是要 Mac 真的动起来的操作，默认摆在首页等于替用户做一次他可能误触的决定——所以默认值归用户，显示与否也归用户，两条规则盯的是同一个开关的不同方向。
+
+**降级兼容是顺手白拿的。** `setEnabled` 里本来就有「把默认关闭的功能 mirror 进历史 `remoteControl.hiddenFeatures` key」这一步，随航一进入 opt-in 列表就自动跟着走：关掉时历史 key 出现 `sidecar`，打开时消失。于是降级到只认历史 key 的老版本仍然尊重同一个选择，不需要新存储字段，也不动已编码的键（配置兼容不变量）。
+
+**升级后可见的后果，写明白。** 已装 build 38 的人从没拨过这个开关，`explicitlyEnabled` 里没有 `sidecar`，更新到含本改动的构建后首页随航行会**消失**，要自己去「设置 → 控制功能 → 屏幕操作」打开。1.2.3 的 `whatsNew`（中英两份）已按新路径改写，不再说「分区新增随航入口」这种会让人找不到东西的话。
+
+**测试。** `sidecarJoinsTheScreenSectionEnabledAndWithoutACommand` 拆成两条：`sidecarStartsOffAndOnlyTheUserCanPutItOnTheHomeScreen`（默认关；关掉不等于从设置列表删掉；打开后能上首页；重启还在；再关掉不丢原来的位置）与 `sidecarOptInMirrorsIntoTheHistoricalHiddenKey`（历史 key 两个方向都跟随）。另有两处「除 navigation 外全默认开」的断言改成显式的 `defaultOnFeatures`，否则它们会替默认值说话。XCUITest 改名 `testSidecarRowAppearsOnlyOnceTheUserEnablesIt`：先等 `control.displayOff` 证明首页真的画出来了，再断言随航不在——否则「不存在」可能只是还没渲染；然后进设置断言 `controlToggle.sidecar` 读 "0"、拨到 "1"、重启、断言行出现且点进去仍然给出真实原因。反向对照两次都咬住：把默认改回开启，单元测试立刻 6 条 issue、5 个测试红；XCUITest 在 169/177/181/186/190 行红。改回之后 iOS 单元 65 个测试、12 个套件全绿，该 XCUITest 通过（25.264 秒）。
+
+**顺带发现三条既有失败，与本次改动无关。** 同一个 scheme 里 `testControlCaptionsStayInsideKeysAtLargeTextSizes`、`testControlSelectionPersistsAndHomeMediaLayoutFits`、`testTouchBarAndAllHomeButtonsFitWithoutScrolling` 是红的，红的都是首页 `mediaPlayPause` / `mute` 的 caption 断言；在**改动前**的代码 + 干净模拟器容器上复跑，同样三条以同样的信息失败，所以不是这次带来的。`testConnectionPriorityCanBeReorderedAndPersists` 则是容器/顺序状态相关：脏容器必红，干净容器在这次改动后跑绿。首页媒体键 caption 为什么读不到，需要单独开一轮排查。
+
+**⚠️ 发布状态同 §七十三。** GitHub `misswell` 仍是 suspended，本条也只到本地提交；TestFlight build 39 依旧没上传——Mac 侧的修复还没到用户机器上，先发一个「默认把随航藏起来」的手机版本只会让人以为功能没了。

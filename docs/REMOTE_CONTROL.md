@@ -394,7 +394,13 @@ disconnectSidecar    RemoteSidecarTargetRequest{deviceID} → snapshot payload
   `sendSidecarTarget` both return before the wire without the advertisement, and
   the poll timer is never armed for such a Mac — and since the bit now means
   "these commands are answered", a Mac that has the feature is never silenced by
-  it.
+  it. **Nothing on the phone is switched on for the user, though:** mirroring a
+  whole iPad is opt-in, like the four navigation keys —
+  `RemoteControlFeature.isEnabledByDefault` is false for `.sidecar`, so a fresh
+  install shows no Sidecar row until the user opens Settings › Control features ›
+  Screen. The opt-in is mirrored into the historical `remoteControl.hiddenFeatures`
+  key in both directions, so a downgrade to a release that only reads that key
+  keeps honouring the same choice.
 - **The Mac owns the session.** `SidecarService` drives the private framework
   through the same code path the system's own UI uses; the phone is a remote
   controller only. MacPilot captures no screen, encodes no video and opens no

@@ -36,7 +36,8 @@ Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftP
 ## iOS companion app (PilotNest)
 
 - `iOS/MacPilotRemote/` is an **xcodegen** project: run `xcodegen generate` in that directory after adding or removing files, then build with `xcodebuild -project MacPilotRemote.xcodeproj -scheme MacPilotRemote`. Device installs go through `xcrun devicectl device install app`.
-- User-facing strings live in `Resources/RemoteText.swift`; keep `.simplifiedChinese` and `.english` entries in sync (same rule as `AppText`).
+- User-facing strings live in `Resources/RemoteText.swift`; keep `.simplifiedChinese` and `.english` entries in sync (same rule as `AppText`). Ask for an explicit `language:` when a test must prove both tables (`RemoteText.value(_:language:)`), because reading through the system locale only, a missing Chinese entry silently answers in English.
+- **Home-screen controls the user never asked for are forbidden.** `RemoteControlFeature.isEnabledByDefault` is false for `.navigation` and for `.sidecar`: paging keys move the Mac's page and Sidecar takes over a second display, so both stay hidden until switched on in Settings › Control features. A new feature in those groups must be opt-in too. `RemoteControlPreferencesTests` and `ControlSectionOrderUITests.testSidecarRowAppearsOnlyOnceTheUserEnablesIt` pin it.
 - The trackpad page deliberately **never follows system rotation**. Orientation is owned by `App/InterfaceOrientationController` (portrait lock on iPhone, free rotation on iPad, frozen while the trackpad page is open, landscape only while the remote keyboard is up in a sideways hold). Never add gyro-driven rotation.
 - Version bumps live in `project.yml` (`MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`); every TestFlight upload needs a new build number.
 

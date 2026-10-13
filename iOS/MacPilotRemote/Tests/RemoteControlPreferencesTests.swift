@@ -11,9 +11,17 @@ struct RemoteControlPreferencesTests {
         try body(RemoteControlPreferences(defaults: defaults), defaults)
     }
 
+    /// What a fresh install shows: every row except the navigation keys and
+    /// Sidecar, both of which act on the Mac beyond a single tap and so wait for
+    /// the user to switch them on.
+    private var defaultOnFeatures: [RemoteControlFeature] {
+        RemoteControlFeature.allCases.filter { $0.group != .navigation && $0 != .sidecar }
+    }
+
     @Test func visibilitySurvivesRelaunchAndHiddenControlsKeepTheirPositions() throws {
         try withPreferences { preferences, defaults in
-            #expect(RemoteControlFeature.allCases.filter { $0.group != .navigation }.allSatisfy(preferences.isEnabled))
+            #expect(defaultOnFeatures.allSatisfy(preferences.isEnabled))
+            #expect(!preferences.isEnabled(.sidecar), "Sidecar waits for the user to switch it on")
             preferences.setEnabled(false, for: .mediaPrevious)
             preferences.setEnabled(false, for: .keyboard)
             preferences.moveFeatures(in: .media, fromOffsets: IndexSet(integer: 2), toOffset: 0)
@@ -42,8 +50,10 @@ struct RemoteControlPreferencesTests {
     @Test func navigationAppendsWithoutDisturbingTheFourOriginalSections() throws {
         try withPreferences { preferences, _ in
             #expect(preferences.orderedGroups == RemoteControlFeature.Group.allCases)
+            // The screen section is still there on a fresh install; only its
+            // Sidecar row waits for the switch.
             #expect(preferences.homeSections == [
-                [.desktop, .trackpad], [.displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock, .sidecar],
+                [.desktop, .trackpad], [.displayOff, .wakeDisplay, .lockScreen, .wakeAndUnlock],
                 [.mediaPrevious, .mediaPlayPause, .mediaNext], [.brightness, .volume, .mute]
             ])
         }
@@ -143,27 +153,50 @@ struct RemoteControlPreferencesTests {
     }
 
     /// Sidecar opens a sheet, so it must not look like a one-shot command row:
-    /// the home grid branches on exactly this `nil`.
-    @Test func sidecarJoinsTheScreenSectionEnabledAndWithoutACommand() throws {
-        try withPreferences { preferences, _ in
+    /// the home grid branches on exactly this `nil`. It also starts switched off
+    /// — mirroring a second display onto an iPad is not something a fresh install
+    /// should do to the user unasked.
+    @Test func sidecarStartsOffAndOnlyTheUserCanPutItOnTheHomeScreen() throws {
+        try withPreferences { preferences, defaults in
             #expect(RemoteControlFeature.sidecar.group == .screen)
-            #expect(preferences.isEnabled(.sidecar))
             #expect(RemoteControlFeature.sidecar.command == nil)
             #expect(RemoteControlFeature.sidecar.navigationKey == nil)
-            #expect(preferences.features(in: .screen).contains(.sidecar))
-            #expect(preferences.homeSections[1].contains(.sidecar))
-            preferences.setEnabled(false, for: .sidecar)
+            #expect(!preferences.isEnabled(.sidecar))
+            #expect(preferences.features(in: .screen).contains(.sidecar),
+                    "Off must not delete the row from the settings list")
             #expect(!preferences.homeSections.flatMap { $0 }.contains(.sidecar))
+            #expect(defaults.object(forKey: "remoteControl.hiddenFeatures") == nil)
+
+            preferences.setEnabled(true, for: .sidecar)
+            #expect(preferences.homeSections[1].contains(.sidecar))
+            let reloaded = RemoteControlPreferences(defaults: defaults)
+            #expect(reloaded.isEnabled(.sidecar), "The switch the user made must survive relaunch")
             // Hiding keeps the row's place, so showing it again does not move it.
-            #expect(preferences.features(in: .screen).contains(.sidecar))
+            reloaded.setEnabled(false, for: .sidecar)
+            #expect(reloaded.features(in: .screen).contains(.sidecar))
+        }
+    }
+
+    /// Older releases read only the historical hidden key, so Sidecar's opt-in has
+    /// to be mirrored there in both directions — otherwise a downgrade to a build
+    /// that knows nothing about `enabledFeatures` would show the row anyway.
+    @Test func sidecarOptInMirrorsIntoTheHistoricalHiddenKey() throws {
+        try withPreferences { preferences, defaults in
+            preferences.setEnabled(true, for: .desktop)
+            #expect(defaults.stringArray(forKey: "remoteControl.hiddenFeatures")?.contains("sidecar") == true)
+            preferences.setEnabled(true, for: .sidecar)
+            let hidden = defaults.stringArray(forKey: "remoteControl.hiddenFeatures") ?? []
+            #expect(!hidden.contains("sidecar"))
+            #expect(defaults.stringArray(forKey: "remoteControl.enabledFeatures")?.contains("sidecar") == true)
         }
     }
 
     @Test func navigationStartsOffWithoutChangingOtherDefaultsOrWritingPreferences() throws {
         try withPreferences { preferences, defaults in
             #expect(RemoteControlFeature.Group.navigation.features.allSatisfy { !preferences.isEnabled($0) })
-            #expect(RemoteControlFeature.allCases.filter { $0.group != .navigation }.allSatisfy(preferences.isEnabled))
+            #expect(defaultOnFeatures.allSatisfy(preferences.isEnabled))
             #expect(!preferences.homeSections.flatMap { $0 }.contains { $0.group == .navigation })
+            #expect(!preferences.isEnabled(.sidecar))
             #expect(defaults.object(forKey: "remoteControl.hiddenFeatures") == nil)
             #expect(defaults.object(forKey: "remoteControl.enabledFeatures") == nil)
         }

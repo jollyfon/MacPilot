@@ -3,5 +3,5 @@
   "keywords": "mac,锁屏,解锁,黑屏,远程,遥控,唤醒,电脑,专注,助手",
   "marketingUrl": "https://github.com/misswell/MacPilot",
   "supportUrl": "https://github.com/misswell/MacPilot/issues",
-  "whatsNew": "在 iPhone 上开启随航：选择 Mac 能发现的 iPad，让 Mac 启动原生随航显示，随时可以断开。\n\n新增\n• 「屏幕操作」分区新增随航入口。设备列表由 Mac 提供，显示的就是这台 Mac 此刻能连到的 iPad。\n• 一键连接、一键断开，并记住上次使用的 iPad。\n• 状态只在系统确认后显示：正在连接、已连接、正在断开，或带原因的失败。\n• 切换到另一台 iPad 前会先确认，不会误断正在使用的会话。\n• 当 Mac 无法驱动随航时，入口会直接说明原因，而不是给一个按不动的按钮。\n\n需配合支持随航的新版 MacPilot；其余功能仍兼容旧版 Mac。"
+  "whatsNew": "在 iPhone 上开启随航：选择 Mac 能发现的 iPad，让 Mac 启动原生随航显示，随时可以断开。\n\n新增\n• 随航默认关闭：在「设置 → 控制功能 → 屏幕操作」打开随航开关后，首页出现随航入口。设备列表由 Mac 提供，显示的就是这台 Mac 此刻能连到的 iPad。\n• 一键连接、一键断开，并记住上次使用的 iPad。\n• 状态只在系统确认后显示：正在连接、已连接、正在断开，或带原因的失败。\n• 切换到另一台 iPad 前会先确认，不会误断正在使用的会话。\n• 当 Mac 上的 MacPilot 不带随航功能时，入口会直接说明原因，而不是给一个按不动的按钮。\n\n需配合支持随航的新版 MacPilot；其余功能仍兼容旧版 Mac。"
 }

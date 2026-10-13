@@ -11,7 +11,10 @@ enum RemoteControlFeature: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var isEnabledByDefault: Bool { group != .navigation }
+    /// Paging keys move the Mac's page and Sidecar takes over a second display:
+    /// neither belongs on the home screen of someone who never asked for it, so
+    /// both appear only after the user switches them on in the control settings.
+    var isEnabledByDefault: Bool { group != .navigation && self != .sidecar }
 
     enum Group: String, CaseIterable, Identifiable {
         case input, screen, media, levels, navigation

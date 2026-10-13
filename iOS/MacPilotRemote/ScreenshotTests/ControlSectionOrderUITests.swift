@@ -152,21 +152,43 @@ final class ControlSectionOrderUITests: XCTestCase {
                        "Feature ordering should survive relaunch")
     }
 
-    /// The home page shows what the user switched on. Which Mac is connected, and
-    /// whether that Mac offers Sidecar at all, is answered inside the row's own
-    /// screen — never by quietly dropping the row the user just enabled.
+    /// Sidecar mirrors a whole iPad, so a fresh install does not offer it: the row
+    /// appears only after the user switches it on, and then survives relaunch.
+    /// Which Mac is connected, and whether that Mac can run the session, is
+    /// answered inside the row's own screen — never by quietly dropping a control
+    /// the user just enabled.
     @MainActor
-    func testSidecarRowStaysOnTheHomePageAndNamesWhyItCannotRun() {
+    func testSidecarRowAppearsOnlyOnceTheUserEnablesIt() {
         let app = XCUIApplication()
         app.launch()
 
-        let sidecarRow = app.buttons["control.sidecar"]
+        // Prove the home page actually rendered before claiming a row is absent —
+        // otherwise this passes simply because nothing had been drawn yet.
+        XCTAssertTrue(app.buttons["control.displayOff"].waitForExistence(timeout: 15),
+                      "The screen section should be on the home page")
+        XCTAssertFalse(app.buttons["control.sidecar"].exists,
+                       "Sidecar takes over a second display, so it must not be on by default")
+
+        openControlSettings(in: app)
+        let sidecarToggle = app.switches["controlToggle.sidecar"]
+        scrollUntilHittable([sidecarToggle], in: app)
+        XCTAssertTrue(sidecarToggle.waitForExistence(timeout: 10),
+                      "A feature that is off still belongs in the control list")
+        XCTAssertEqual(sidecarToggle.value as? String, "0", "Its switch should read off")
+        let switchButton = sidecarToggle.descendants(matching: .switch).firstMatch
+        XCTAssertTrue(switchButton.isHittable)
+        switchButton.tap()
+        XCTAssertEqual(sidecarToggle.value as? String, "1")
+
+        app.terminate()
+        app.launch()
+        let enabledRow = app.buttons["control.sidecar"]
         XCTAssertTrue(
-            sidecarRow.waitForExistence(timeout: 15),
+            enabledRow.waitForExistence(timeout: 15),
             "A switched-on control belongs on the home page even with no Mac offering Sidecar"
         )
-        XCTAssertTrue(sidecarRow.isHittable, "The Sidecar row should take a tap")
-        sidecarRow.tap()
+        XCTAssertTrue(enabledRow.isHittable, "The Sidecar row should take a tap")
+        enabledRow.tap()
 
         let honestReasons = [
             "Connect to a Mac to start Sidecar.", "连接 Mac 后可以开启随航。",
