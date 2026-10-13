@@ -2113,9 +2113,9 @@ PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac �
 
 **真机这一环在日志里自己完成了。** 本机 `/Applications/MacPilot.app` 由用户自己在 22:02 升级到 `1.2.1-beta.18` 并重启（不是我动的——发布纪律明确禁止我替换或重启本机安装），而 `~/Library/Logs/MacPilot/Diagnostics.log` 从那一刻起给出了 §七十三 反面的全部证据：
 
-- `client hello name=iPhone paired=true advertised=displayOff,dockGroups,…,sidecar,… caps=…,sidecar,…` ——**`sidecar` 与 `dockGroups` 同时出现在广告集合里**，正是协议要求提升之后才有的结果。
+- `client hello name=iPhone paired=true advertised=displayOff,dockGroups,…,sidecar,… caps=…,sidecar,…` ——**`sidecar` 与 `dockGroups` 同时出现在广告集合里**，正是协议要求提升之后才有的结果。同一台手机、同一份日志里的前后对照最干净：21 点那几条 hello 的 `caps=` 是 `displayOff,inputPressure,inputPressureStream,lock,mediaControl,navigationKeys,realtimeInput,remoteDesktop,unlock,wake`（**没有 sidecar**），22:02 升级之后的第一条起就多了 `sidecar`——变量只有 Mac 的构建号。
 - `sidecar loaded isSupported=true` 与 `sidecar isSupported=true` 各一行——修复前这两行根本没机会被问，因为主机从没接上。
-- `getSidecarDevices` 今天全天 **36 次命中，全部落在 22:02 之后**，升级前一次都没有；这就是 §七十三 里「整份日志 0 命中」的直接反证，命令终于出门了。
+- `getSidecarDevices` 今天全天 **36 次命中，全部落在 22 点**，而这份日志从 `2026-10-12 22:02` 起一直有 RemoteControl 活动（今天 00–21 点每小时都有，21 点还有 3 条 iPhone 的 hello）——**也就是说升级前那段是有覆盖、且零命中的**，不是「日志刚好没记」。这就是 §七十三 里「整份日志 0 命中」的直接反证：命令终于出门了。
 - 两次完整的连接闭环：22:02:27 `connectSidecar` → `operation started intent=connecting device=A2104C48-…` → `connectToDevice:completion:` → 3.2 秒后 `connecting confirmed by the system`；22:02:46 `disconnectSidecar` → `disconnectFromDevice:completion:` → 0.2 秒后 `disconnecting confirmed by the system`。22:03:49–22:03:58 同一台设备再来一遍，**说明可重复，不是撞上一次的巧合**。
 - 轮询节奏与披露给用户的说明一致（面板静止约每 3 秒一次），首次 `getSidecarDevices` 延迟 78ms、之后 0–2ms——框架冷启动的代价只落在第一次。
 
