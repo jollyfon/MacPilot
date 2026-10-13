@@ -365,12 +365,25 @@ connectSidecar       RemoteSidecarTargetRequest{deviceID} → snapshot payload
 disconnectSidecar    RemoteSidecarTargetRequest{deviceID} → snapshot payload
 ```
 
-- **Capability gated twice.** `sidecar` is advertised in the Bonjour TXT record
-  and in `serverHello` only on a machine where `SidecarCore` reports support,
-  and only to a client that declares the feature itself. Shipped App Store
-  phones decode capabilities as a closed enum, so they never see the bit and
-  never send these commands; a Mac without Sidecar never routes them. The
-  router answers `unsupportedCommand` either way.
+- **Capability gated twice, and it means *buildable*, not *supported*.** `sidecar`
+  is advertised in the Bonjour TXT record and in `serverHello` whenever this Mac
+  has the Sidecar host wired, and only to a client that declares the feature
+  itself. The bit answers "can these three commands be understood and answered
+  here?", because that is the only question a phone can act on before asking: a
+  Mac whose decoder does not know the raw value drops the connection. Whether the
+  machine can drive a display right now is answered per request, and a Mac that
+  has the commands but cannot obey them returns `sidecarUnavailable` rather than
+  `unsupportedCommand` — `unsupportedCommand` stays reserved for a Mac with no
+  Sidecar host at all. Shipped App Store phones decode capabilities as a closed
+  enum, so they never see the bit and never send these commands.
+- **Hosting hooks are protocol requirements, not extension defaults.** A member a
+  protocol does not declare is resolved *statically* inside its own extension, so
+  `advertisedCapabilities` reading `sidecarHosting` / `dockGroupsHosting` used to
+  see the extension's `nil` on every host — including `RemoteControlServer`, which
+  did provide both. That is why a phone never asked about Sidecar on a Mac that had
+  the whole feature wired: the bit was withheld by dispatch, not by the machine.
+  `Tests/MacPilotTests/SidecarRemoteTests.swift` pins the rule by reading
+  `advertisedCapabilities` off a server through `any RemoteConnectionHost`.
 - **The home key follows the user, not the Mac.** A control switched on in
   Settings stays on the home page even when the connected Mac never advertised
   Sidecar, and even while the link is down. The earlier rule hid the row, and it
@@ -379,7 +392,9 @@ disconnectSidecar    RemoteSidecarTargetRequest{deviceID} → snapshot payload
   "looking for iPads", and offers no retry for an answer the Mac never gave.
   Capability still decides what leaves the phone — `refreshSidecarDevices` and
   `sendSidecarTarget` both return before the wire without the advertisement, and
-  the poll timer is never armed for such a Mac.
+  the poll timer is never armed for such a Mac — and since the bit now means
+  "these commands are answered", a Mac that has the feature is never silenced by
+  it.
 - **The Mac owns the session.** `SidecarService` drives the private framework
   through the same code path the system's own UI uses; the phone is a remote
   controller only. MacPilot captures no screen, encodes no video and opens no
@@ -433,13 +448,16 @@ disconnectSidecar    RemoteSidecarTargetRequest{deviceID} → snapshot payload
   so a change to `SidecarCoreRuntime` is not verified until it has moved a real
   iPad.
 - **The support verdict is never cached.** `+isSupported` answers for *right now*,
-  and the first question arrives at listener startup, when SidecarCore's own state
-  may not have settled yet. Caching that first answer froze a transient "no" for
-  the whole process: the server kept withholding the `sidecar` capability from
-  every hello, so a phone that could have driven Sidecar showed no entry at all
-  while its settings page — which lists the user's visibility preferences, not the
-  Mac's advertisement — still showed the toggle on. Only the `dlopen` and the class
-  lookup are one-shot; the verdict is re-asked on every read.
+  and the first question can arrive before SidecarCore's own state has settled, so
+  the verdict is re-asked on every read and only the `dlopen` and class lookup are
+  retried-until-resolved rather than latched on the first failure.
+  **This rule was written against a wrong diagnosis and must not be read as one.**
+  A phone that showed no Sidecar entry on a supporting Mac was not meeting a
+  transient "no" from the framework: the capability never reached the hello at all
+  because of the dispatch bug above. `SidecarCore` documents no reason for a "no",
+  so the bridge now logs the load result (with `dlerror()`), each verdict
+  *transition*, and the support-shaped selectors `SidecarDisplayManager` actually
+  exposes — without those lines a refused Mac is undiagnosable after the fact.
 - **The TXT record is a startup snapshot, so it cannot prove what a phone was
   told.** `RemoteControlServer.makeListener` computes `advertisedCapabilities`
   once and bakes it into `NWListener.Service`, which is never republished. A
