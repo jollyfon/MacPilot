@@ -236,7 +236,9 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
     /// 原生输入框使用窗口的字段编辑器，它就是一个 `NSTextView`。
     private var isComposingText: Bool {
         guard let textView = firstResponder as? NSTextView else { return false }
-        return textView.markedRange().location != NSNotFound
+        // AppKit can retain {insertion point, 0} after composition ends.
+        // A non-NSNotFound location alone does not mean there is marked text.
+        return textView.hasMarkedText()
     }
 }
 

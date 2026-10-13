@@ -2268,6 +2268,101 @@ private final class QuickSearchMarkedEditor: NSTextView {
     override func hasMarkedText() -> Bool { true }
 }
 
+// Exercise the real panel's event-start composition snapshot, not only the delegate.
+@MainActor
+struct QuickSearchPanelInputTests {
+    @Test func zeroLengthMarkedRangeDoesNotBlockEscape() async throws {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        harness.model.openPanel()
+        let fixture = QuickSearchPanelInputFixture(model: harness.model)
+        defer { fixture.panel.close() }
+        #expect(fixture.editor.markedRange().location != NSNotFound)
+        #expect(!fixture.editor.hasMarkedText())
+
+        fixture.panel.sendEvent(try fixture.event(keyCode: UInt16(kVK_Escape), characters: "\u{1b}"))
+
+        #expect(!harness.model.isPanelVisible)
+        #expect(harness.launcher.calls.isEmpty)
+        #expect(!fixture.panel.isVisible)
+    }
+
+    @Test func zeroLengthMarkedRangeDoesNotBlockOpeningTheSelectedApp() async throws {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        await harness.enable(entries: sampleApps)
+        harness.model.openPanel()
+        harness.model.updateQuery("计算器")
+        let selected = try #require(harness.model.results.first)
+        let fixture = QuickSearchPanelInputFixture(model: harness.model)
+        defer { fixture.panel.close() }
+
+        fixture.panel.sendEvent(try fixture.event(keyCode: UInt16(kVK_Return), characters: "\r"))
+
+        try #require(fixture.commands == [.openSelection])
+        await harness.launcher.wait(forCalls: 1)
+        #expect(harness.launcher.calls.count == 1)
+        #expect(harness.launcher.calls.first?.url == selected.url)
+        #expect(!harness.model.isPanelVisible)
+        #expect(!fixture.panel.isVisible)
+    }
+
+    @Test func actualMarkedTextKeepsReturnAndEscapeInTheEditor() async throws {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        harness.model.openPanel()
+        let fixture = QuickSearchPanelInputFixture(model: harness.model)
+        defer { fixture.panel.close() }
+        fixture.editor.composing = true
+
+        fixture.panel.sendEvent(try fixture.event(keyCode: UInt16(kVK_Return), characters: "\r"))
+        fixture.panel.sendEvent(try fixture.event(keyCode: UInt16(kVK_Escape), characters: "\u{1b}"))
+
+        #expect(harness.model.isPanelVisible)
+        #expect(harness.launcher.calls.isEmpty)
+        #expect(!fixture.panel.isVisible)
+    }
+}
+
+@MainActor
+private final class QuickSearchPanelInputFixture: NSObject, NSWindowDelegate {
+    let panel: QuickSearchPanel
+    let field = QuickSearchQueryTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 30))
+    let editor = QuickSearchZeroLengthMarkedEditor()
+    var commands: [QuickSearchKeyAction] = []
+
+    init(model: QuickSearchModel) {
+        panel = QuickSearchPanel(model: model, onClose: {})
+        super.init()
+        editor.isFieldEditor = true
+        panel.delegate = self
+        panel.contentView = field
+        field.onCommand = { [weak self, weak model] in
+            self?.commands.append($0)
+            model?.handleSearchKeyAction($0)
+        }
+        // Do not order the panel front or register a real shortcut.
+        precondition(panel.makeFirstResponder(field))
+    }
+
+    func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? { editor }
+
+    func event(keyCode: UInt16, characters: String) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode
+        ))
+    }
+}
+
+@MainActor
+private final class QuickSearchZeroLengthMarkedEditor: NSTextView {
+    var composing = false
+    override func markedRange() -> NSRange { NSRange(location: 0, length: composing ? 1 : 0) }
+    override func hasMarkedText() -> Bool { composing }
+}
+
 // MARK: - 性能实测
 
 /// 写 stderr：`swift test` 会原样带出来，且不影响通过/失败判定。
