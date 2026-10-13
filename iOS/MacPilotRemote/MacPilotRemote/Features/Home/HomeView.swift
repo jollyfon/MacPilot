@@ -255,14 +255,13 @@ struct HomeView: View {
 
     @ViewBuilder
     private func actionGrid(_ actions: [RemoteControlFeature]) -> some View {
-        // Sidecar is the one screen row that disappears rather than dims. The
-        // capability belongs to the machine, and no wording makes a button this
-        // Mac can never honour look honest — the same rule hides it while the
-        // link is down, because nothing is known about the Mac then either.
-        let visible = actions.filter { $0 != .sidecar || appModel.supportsSidecar }
-        if !visible.isEmpty {
+        // What is on show is the user's choice, not the Mac's advertisement:
+        // turning a row on in 控制功能 means it is on the home page. Whether it
+        // can be honoured right now is answered inside the row's own screen,
+        // which states plainly when the connected Mac does not offer Sidecar.
+        if !actions.isEmpty {
             LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(visible) { feature in
+                ForEach(actions) { feature in
                     actionButton(feature)
                 }
             }

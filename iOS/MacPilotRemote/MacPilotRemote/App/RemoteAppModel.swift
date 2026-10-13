@@ -1788,6 +1788,7 @@ final class RemoteAppModel: ObservableObject {
                 guard let interval = SidecarPanelPolicy.pollInterval(
                     isPanelVisible: self.isSidecarPanelVisible,
                     isConnected: self.connectionState.isConnected,
+                    advertisesSidecar: self.connection.supportsSidecar,
                     hasOperation: self.isSidecarOperationLive
                 ) else { return }
                 try? await Task.sleep(for: interval)

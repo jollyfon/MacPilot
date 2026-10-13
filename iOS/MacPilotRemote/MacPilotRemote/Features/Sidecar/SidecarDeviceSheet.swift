@@ -17,6 +17,7 @@ struct SidecarDeviceSheet: View {
     private var state: SidecarPanelPolicy.PanelState {
         SidecarPanelPolicy.panelState(
             isConnected: appModel.connectionState.isConnected,
+            advertisesSidecar: appModel.supportsSidecar,
             snapshot: appModel.sidecarSnapshot,
             didFailToLoad: appModel.didFailToLoadSidecar
         )
@@ -49,6 +50,11 @@ struct SidecarDeviceSheet: View {
                 case .macDisconnected:
                     statusSection(icon: "desktopcomputer",
                                   title: "sidecarNotConnected", detail: "sidecarNotConnectedHint")
+                case .macWithoutSidecar:
+                    // No retry row: the request never leaves the phone, so a
+                    // retry button would only re-decide the same fact.
+                    statusSection(icon: "nosign",
+                                  title: "sidecarUnsupported", detail: "sidecarUnsupportedHint")
                 }
                 footerRow
             }
@@ -285,7 +291,8 @@ struct SidecarDeviceSheet: View {
                 Image(systemName: "arrow.clockwise")
             }
         }
-        .disabled(!appModel.connectionState.isConnected || appModel.isRefreshingSidecarList)
+        .disabled(!appModel.connectionState.isConnected || !appModel.supportsSidecar
+                  || appModel.isRefreshingSidecarList)
         .accessibilityLabel(appModel.text("sidecarRefresh"))
     }
 }

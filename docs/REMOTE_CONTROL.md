@@ -369,10 +369,17 @@ disconnectSidecar    RemoteSidecarTargetRequest{deviceID} → snapshot payload
   and in `serverHello` only on a machine where `SidecarCore` reports support,
   and only to a client that declares the feature itself. Shipped App Store
   phones decode capabilities as a closed enum, so they never see the bit and
-  never send these commands; a Mac without Sidecar never shows the home entry.
-  The router answers `unsupportedCommand` either way. On the phone the home key
-  disappears rather than dims — nothing is known about a Mac while the link is
-  down — while its Settings switch keeps its saved position.
+  never send these commands; a Mac without Sidecar never routes them. The
+  router answers `unsupportedCommand` either way.
+- **The home key follows the user, not the Mac.** A control switched on in
+  Settings stays on the home page even when the connected Mac never advertised
+  Sidecar, and even while the link is down. The earlier rule hid the row, and it
+  read as the phone ignoring the user's own settings. The honesty moved inside
+  the sheet: `macWithoutSidecar` names the reason instead of showing an endless
+  "looking for iPads", and offers no retry for an answer the Mac never gave.
+  Capability still decides what leaves the phone — `refreshSidecarDevices` and
+  `sendSidecarTarget` both return before the wire without the advertisement, and
+  the poll timer is never armed for such a Mac.
 - **The Mac owns the session.** `SidecarService` drives the private framework
   through the same code path the system's own UI uses; the phone is a remote
   controller only. MacPilot captures no screen, encodes no video and opens no

@@ -18,45 +18,72 @@ struct SidecarPanelPolicyTests {
 
     @Test func aClosedPanelOrADeadLinkNeverPolls() {
         #expect(SidecarPanelPolicy.pollInterval(
-            isPanelVisible: false, isConnected: true, hasOperation: true) == nil)
+            isPanelVisible: false, isConnected: true, advertisesSidecar: true, hasOperation: true) == nil)
         #expect(SidecarPanelPolicy.pollInterval(
-            isPanelVisible: true, isConnected: false, hasOperation: true) == nil)
+            isPanelVisible: true, isConnected: false, advertisesSidecar: true, hasOperation: true) == nil)
         #expect(SidecarPanelPolicy.pollInterval(
-            isPanelVisible: false, isConnected: false, hasOperation: false) == nil)
+            isPanelVisible: false, isConnected: false, advertisesSidecar: true, hasOperation: false) == nil)
+    }
+
+    /// The sheet is open on a Mac that never offered Sidecar. Every tick would
+    /// be refused before it left the phone, so there is nothing to schedule.
+    @Test func aMacThatDoesNotOfferSidecarNeverPolls() {
+        #expect(SidecarPanelPolicy.pollInterval(
+            isPanelVisible: true, isConnected: true, advertisesSidecar: false, hasOperation: false) == nil)
+        #expect(SidecarPanelPolicy.pollInterval(
+            isPanelVisible: true, isConnected: true, advertisesSidecar: false, hasOperation: true) == nil)
     }
 
     @Test func anOperationEarnsTheFastCadenceAndASettledListDoesNot() {
         #expect(SidecarPanelPolicy.pollInterval(
-            isPanelVisible: true, isConnected: true, hasOperation: true) == .seconds(1))
+            isPanelVisible: true, isConnected: true, advertisesSidecar: true, hasOperation: true) == .seconds(1))
         #expect(SidecarPanelPolicy.pollInterval(
-            isPanelVisible: true, isConnected: true, hasOperation: false) == .seconds(3))
+            isPanelVisible: true, isConnected: true, advertisesSidecar: true, hasOperation: false) == .seconds(3))
     }
 
     // MARK: - Panel state
 
     @Test func aMissingLinkOutranksEveryListState() {
         #expect(SidecarPanelPolicy.panelState(
-            isConnected: false, snapshot: snapshot(devices: [free]), didFailToLoad: true) == .macDisconnected)
+            isConnected: false, advertisesSidecar: true,
+            snapshot: snapshot(devices: [free]), didFailToLoad: true) == .macDisconnected)
         #expect(SidecarPanelPolicy.panelState(
-            isConnected: false, snapshot: nil, didFailToLoad: false) == .macDisconnected)
+            isConnected: false, advertisesSidecar: false,
+            snapshot: nil, didFailToLoad: false) == .macDisconnected)
+    }
+
+    /// The row is on show because the user switched it on, so the sheet has to
+    /// answer the case the old home-page filter used to hide: a Mac that was
+    /// never asked cannot be "still looking" for iPads.
+    @Test func aMacWithoutTheAdvertisementIsStatedNotPretendedToBeLoading() {
+        #expect(SidecarPanelPolicy.panelState(
+            isConnected: true, advertisesSidecar: false,
+            snapshot: nil, didFailToLoad: false) == .macWithoutSidecar)
+        // A stale list from a previous Mac does not survive into this answer.
+        #expect(SidecarPanelPolicy.panelState(
+            isConnected: true, advertisesSidecar: false,
+            snapshot: snapshot(devices: [free]), didFailToLoad: false) == .macWithoutSidecar)
     }
 
     /// "No iPad found" and "cannot look" are different facts. Reporting the
     /// second as the first is what makes a working feature look broken.
     @Test func cannotSearchIsNeverReportedAsFoundNothing() {
         #expect(SidecarPanelPolicy.panelState(
-            isConnected: true, snapshot: nil, didFailToLoad: false) == .loading)
+            isConnected: true, advertisesSidecar: true, snapshot: nil, didFailToLoad: false) == .loading)
         #expect(SidecarPanelPolicy.panelState(
-            isConnected: true, snapshot: nil, didFailToLoad: true) == .unreachable)
+            isConnected: true, advertisesSidecar: true, snapshot: nil, didFailToLoad: true) == .unreachable)
         #expect(SidecarPanelPolicy.panelState(
-            isConnected: true, snapshot: snapshot(devices: []), didFailToLoad: false) == .empty)
+            isConnected: true, advertisesSidecar: true,
+            snapshot: snapshot(devices: []), didFailToLoad: false) == .empty)
         #expect(SidecarPanelPolicy.panelState(
-            isConnected: true, snapshot: snapshot(devices: [free]), didFailToLoad: false) == .ready)
+            isConnected: true, advertisesSidecar: true,
+            snapshot: snapshot(devices: [free]), didFailToLoad: false) == .ready)
     }
 
     @Test func aFailedRefreshKeepsTheLastKnownListInsteadOfBlankingIt() {
         #expect(SidecarPanelPolicy.panelState(
-            isConnected: true, snapshot: snapshot(devices: [free]), didFailToLoad: true) == .ready)
+            isConnected: true, advertisesSidecar: true,
+            snapshot: snapshot(devices: [free]), didFailToLoad: true) == .ready)
     }
 
     // MARK: - Row status

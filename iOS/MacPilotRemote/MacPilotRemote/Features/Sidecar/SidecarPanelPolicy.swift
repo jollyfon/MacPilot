@@ -11,6 +11,9 @@ enum SidecarPanelPolicy {
     enum PanelState: Equatable {
         /// No authenticated link, so there is nobody to ask.
         case macDisconnected
+        /// Linked to a Mac that never offered Sidecar. Asking it would be a
+        /// command it cannot answer, so this is a fact to state, not a load.
+        case macWithoutSidecar
         /// The first answer has not arrived yet.
         case loading
         /// The Mac refused or the request was lost.
@@ -48,10 +51,14 @@ enum SidecarPanelPolicy {
 
     static func panelState(
         isConnected: Bool,
+        advertisesSidecar: Bool,
         snapshot: RemoteSidecarSnapshot?,
         didFailToLoad: Bool
     ) -> PanelState {
         guard isConnected else { return .macDisconnected }
+        // Without the advertisement there is nothing to wait for, and showing
+        // "looking for iPads" would promise a result that can never arrive.
+        guard advertisesSidecar else { return .macWithoutSidecar }
         guard let snapshot else { return didFailToLoad ? .unreachable : .loading }
         return snapshot.devices.isEmpty ? .empty : .ready
     }
@@ -92,8 +99,15 @@ enum SidecarPanelPolicy {
     ///
     /// A closed sheet polls nothing. The Mac answers from `SidecarCore`, which
     /// is not free, and no result is worth fetching for a list nobody sees.
-    static func pollInterval(isPanelVisible: Bool, isConnected: Bool, hasOperation: Bool) -> Duration? {
-        guard isPanelVisible, isConnected else { return nil }
+    static func pollInterval(
+        isPanelVisible: Bool,
+        isConnected: Bool,
+        advertisesSidecar: Bool,
+        hasOperation: Bool
+    ) -> Duration? {
+        // A Mac that never advertised Sidecar would refuse every tick, so there
+        // is no timer to run for it.
+        guard isPanelVisible, isConnected, advertisesSidecar else { return nil }
         // Only an operation changes on its own, so only it earns the fast
         // cadence; a settled list changes when an iPad appears or leaves.
         return hasOperation ? .seconds(1) : .seconds(3)

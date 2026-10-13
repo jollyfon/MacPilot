@@ -152,6 +152,38 @@ final class ControlSectionOrderUITests: XCTestCase {
                        "Feature ordering should survive relaunch")
     }
 
+    /// The home page shows what the user switched on. Which Mac is connected, and
+    /// whether that Mac offers Sidecar at all, is answered inside the row's own
+    /// screen — never by quietly dropping the row the user just enabled.
+    @MainActor
+    func testSidecarRowStaysOnTheHomePageAndNamesWhyItCannotRun() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let sidecarRow = app.buttons["control.sidecar"]
+        XCTAssertTrue(
+            sidecarRow.waitForExistence(timeout: 15),
+            "A switched-on control belongs on the home page even with no Mac offering Sidecar"
+        )
+        XCTAssertTrue(sidecarRow.isHittable, "The Sidecar row should take a tap")
+        sidecarRow.tap()
+
+        let honestReasons = [
+            "Connect to a Mac to start Sidecar.", "连接 Mac 后可以开启随航。",
+            "This Mac does not offer Sidecar.", "这台 Mac 没有提供随航。"
+        ]
+        let reason = app.staticTexts
+            .matching(NSPredicate(format: "label IN %@", honestReasons))
+            .firstMatch
+        XCTAssertTrue(
+            reason.waitForExistence(timeout: 8),
+            "The sheet should state the real reason instead of pretending to look for iPads"
+        )
+        XCTAssertFalse(app.buttons["sidecar.retry"].exists,
+                       "Retrying cannot change an answer the Mac never gave")
+        app.terminate()
+    }
+
     @MainActor
     private func openControlSettings(in app: XCUIApplication) {
         let settingsTab = app.tabBars.buttons.element(boundBy: 2)
