@@ -64,6 +64,7 @@
 		D25FE822845ED567C5629AA4 /* VideoFrameBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44BD0921E648EBD6C5E6797D /* VideoFrameBuffer.swift */; };
 		D9570EAFD947E6C943C5609E /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C3C7D3A57D31F56E250816 /* HomeView.swift */; };
 		DD490523AAB98454CCDDA523 /* PressGestureRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E36953057505FD14ED272AED /* PressGestureRecognizer.swift */; };
+		DD5925FB4DD0DF114B4EF739 /* RemoteTextSidecarStringsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE8A52135C3AB92A01DA4BAA /* RemoteTextSidecarStringsTests.swift */; };
 		E30CA50EFB637567B33E9A39 /* PressureScore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11AAB2029319459E3E108E1 /* PressureScore.swift */; };
 		EDB6E4806D78609E8A2942F7 /* PressureDebugInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AD3A5D4789D587B13BE376E /* PressureDebugInfo.swift */; };
 		EFC379A087AD05F1A8951B4D /* TrackpadOrientationCompass.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1BF7246E89AE5367E76D9EF /* TrackpadOrientationCompass.swift */; };
@@ -149,6 +150,7 @@
 		D110E3CC36E64E72A3521A8C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D152E96DBE715090384BAA76 /* TouchProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchProcessor.swift; sourceTree = "<group>"; };
 		D7093562EFA1A9CB73661828 /* RemoteBLEIdentityProbePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLEIdentityProbePolicy.swift; sourceTree = "<group>"; };
+		DE8A52135C3AB92A01DA4BAA /* RemoteTextSidecarStringsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTextSidecarStringsTests.swift; sourceTree = "<group>"; };
 		E21C2AB621EFBC8E6529C0E5 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		E36953057505FD14ED272AED /* PressGestureRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressGestureRecognizer.swift; sourceTree = "<group>"; };
 		E81ADDA4A7D54CF015D28FD0 /* ControlSectionOrderUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSectionOrderUITests.swift; sourceTree = "<group>"; };
@@ -363,6 +365,7 @@
 				F00C1B29E6E95D05262D3D9A /* RemoteControlPreferencesTests.swift */,
 				4FFFADB7FEE2749461D25A8E /* RemoteDiscoveryStateTests.swift */,
 				781285C1ADB724EF9E3897A7 /* RemoteReconnectLifecycleTests.swift */,
+				DE8A52135C3AB92A01DA4BAA /* RemoteTextSidecarStringsTests.swift */,
 				21D83AE67089B04DF8E33CDD /* RemoteVideoZoomTests.swift */,
 				5F080E6D6418DFB7A61BB39C /* SidecarPanelPolicyTests.swift */,
 			);
@@ -560,6 +563,7 @@
 				76DE2646AF35A8E17A3CC3EA /* RemoteControlPreferencesTests.swift in Sources */,
 				30541BD2DCFACD758D63B28C /* RemoteDiscoveryStateTests.swift in Sources */,
 				2CCED346F1F6F92AF0A9D473 /* RemoteReconnectLifecycleTests.swift in Sources */,
+				DD5925FB4DD0DF114B4EF739 /* RemoteTextSidecarStringsTests.swift in Sources */,
 				33110033AB36379243431578 /* RemoteVideoZoomTests.swift in Sources */,
 				F6924314EE6A88C196606455 /* SidecarPanelPolicyTests.swift in Sources */,
 			);

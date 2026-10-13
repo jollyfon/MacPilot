@@ -170,7 +170,7 @@ final class ControlSectionOrderUITests: XCTestCase {
 
         let honestReasons = [
             "Connect to a Mac to start Sidecar.", "连接 Mac 后可以开启随航。",
-            "This Mac does not offer Sidecar.", "这台 Mac 没有提供随航。"
+            "MacPilot on this Mac has no Sidecar support.", "这台 Mac 上的 MacPilot 没有随航功能。"
         ]
         let reason = app.staticTexts
             .matching(NSPredicate(format: "label IN %@", honestReasons))

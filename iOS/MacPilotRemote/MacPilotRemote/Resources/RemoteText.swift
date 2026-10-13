@@ -4,7 +4,17 @@ import Foundation
 /// user visible string is hard coded in a view.
 enum RemoteText {
     static func value(_ key: String, _ arguments: CVarArg...) -> String {
-        let language = preferredLanguage
+        value(key, language: preferredLanguage, arguments: arguments)
+    }
+
+    /// `AppText` on the Mac has taken the language explicitly from the start, and
+    /// a locale-parity test needs that. Asked only through the system locale, a
+    /// missing `.simplifiedChinese` entry answers in English and looks fine.
+    static func value(_ key: String, language: Language, _ arguments: CVarArg...) -> String {
+        value(key, language: language, arguments: arguments)
+    }
+
+    static func value(_ key: String, language: Language, arguments: [CVarArg]) -> String {
         let table = language == .simplifiedChinese ? chinese : english
         let format = table[key] ?? english[key] ?? key
         guard !arguments.isEmpty else { return format }
@@ -145,8 +155,8 @@ enum RemoteText {
         "sidecarUnavailableHint": "Mac 没有给出设备列表，点右上角刷新重试。",
         "sidecarNotConnected": "连接 Mac 后可以开启随航。",
         "sidecarNotConnectedHint": "随航由 Mac 建立，手机只是遥控器。",
-        "sidecarUnsupported": "这台 Mac 没有提供随航。",
-        "sidecarUnsupportedHint": "随航由 Mac 决定：这台 Mac 的机型与 macOS 要支持随航，并且要运行带随航功能的 MacPilot。重新连接后会再问一次。",
+        "sidecarUnsupported": "这台 Mac 上的 MacPilot 没有随航功能。",
+        "sidecarUnsupportedHint": "随航会话由 Mac 建立：需要带随航功能的 MacPilot 版本，机型与 macOS 也要支持随航。MacPilot 升级后重新连接会再问一次。",
         "sidecarFooter": "随航会话由这台 Mac 建立并保持。关闭本页面不会断开已连接的 iPad；在 Mac 上手动断开后，这里会在下次刷新时同步。",
         "sidecarSwitchTitle": "切换随航设备？",
         "sidecarSwitchMessage": "这台 Mac 同一时间只能随航一台 iPad。连接 %@ 会先断开当前的会话。",
@@ -415,8 +425,8 @@ enum RemoteText {
         "sidecarUnavailableHint": "The Mac answered without a list. Tap refresh to try again.",
         "sidecarNotConnected": "Connect to a Mac to start Sidecar.",
         "sidecarNotConnectedHint": "The Mac builds the session; the phone is only the remote.",
-        "sidecarUnsupported": "This Mac does not offer Sidecar.",
-        "sidecarUnsupportedHint": "The Mac decides this: its model and macOS must support Sidecar, and MacPilot there must include the feature. Reconnecting asks again.",
+        "sidecarUnsupported": "MacPilot on this Mac has no Sidecar support.",
+        "sidecarUnsupportedHint": "The Mac builds the session: it needs a MacPilot build that includes Sidecar, on a model and macOS that support it. Once MacPilot is updated, reconnecting asks again.",
         "sidecarFooter": "The session belongs to this Mac. Closing this page does not disconnect the iPad, and a disconnect made on the Mac shows up here on the next refresh.",
         "sidecarSwitchTitle": "Switch Sidecar device?",
         "sidecarSwitchMessage": "This Mac mirrors one iPad at a time. Connecting %@ ends the current session first.",
