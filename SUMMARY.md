@@ -2031,7 +2031,7 @@ MacPilot 手动黑屏不会产生系统显示休眠通知，因此 held-blank �
 
 验证：QuickSearch 全部套件加配置／注册表／契约／资源相关套件共 118 条测试 16 个套件通过，配置与快捷键、Feature、Resource 相关 84 条通过；全新 scratch 目录的 Release 构建带 `-Xswiftc -warnings-as-errors` 通过（118.94s）。测试全部走注入的应用启动与文件查询替身，不打开用户的应用、不动用户文件。尚未完成：`Tests/Performance/README.md` 的 Phase 2 三十分钟采样要对着**已安装的进程**跑，发布不会替换本机正在运行的 `/Applications/MacPilot.app`，所以那轮 CPU/RSS 长时曲线还没测；替身适配器也不覆盖真实图标缓存与真实 Spotlight 行为，升级后需要手工验收一次呼出、启动与文件段落。
 
-## 七十二、手机端一键随航：Mac 驱动原生 Sidecar，手机只当遥控器（v1.2.1-beta.11，能力位缓存修复在 beta.12，握手能力日志在 beta.13）
+## 七十二、手机端一键随航：Mac 驱动原生 Sidecar，手机只当遥控器（v1.2.1-beta.11，能力位缓存修复在 beta.12，握手能力日志在 beta.13；手机端显示规则改动在 PilotNest 1.2.3 build 38）
 
 PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac 能发现的 iPad 列表，选一台就让 Mac 起原生随航会话。没有自建投屏、没有抓帧编码、没有 AirPlay 会话，Mac 侧只做一件事：调 `SidecarCore`。协议加三条鉴权命令 `getSidecarDevices`／`connectSidecar`／`disconnectSidecar` 和能力位 `sidecar`，模型是 `RemoteSidecarDevice`／`RemoteSidecarSnapshot`／`RemoteSidecarOperation`／`RemoteSidecarTargetRequest`。Mac 侧代码在 `Sources/MacPilot/Sidecar/`：`SidecarCoreBridge`（私有框架）、`SidecarService`（状态机）、`SidecarHosting`（远端接口）。
 
