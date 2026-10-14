@@ -41,7 +41,7 @@ enum ClipboardPanelLayout {
 // MARK: - Panel
 
 /// 非激活浮动面板：打开时不抢占前台应用焦点，失焦自动关闭。
-final class ClipboardPanel: NSPanel {
+final class ClipboardPanel: NSPanel, NSWindowDelegate {
     private(set) var isPresented = false
     let onClose: () -> Void
 
@@ -50,14 +50,19 @@ final class ClipboardPanel: NSPanel {
 
     private var keyMonitor: Any?
     private var pendingResignClose: DispatchWorkItem?
+    private var pendingPositionSave: DispatchWorkItem?
+    private var isDraggingFromHeader = false
     private let contentHostingView: NSHostingView<ClipboardPanelContent>
+    private let windowDrag: (NSWindow, NSEvent) -> Void
 
     init(
+        windowDrag: @escaping (NSWindow, NSEvent) -> Void = { $0.performDrag(with: $1) },
         onClose: @escaping () -> Void,
         content: @escaping () -> ClipboardPanelContent
     ) {
         self.onClose = onClose
         self.contentHostingView = NSHostingView(rootView: content())
+        self.windowDrag = windowDrag
 
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: ClipboardPanelLayout.listColumnWidth, height: 420),
@@ -74,7 +79,8 @@ final class ClipboardPanel: NSPanel {
         hasShadow = true
         animationBehavior = .none
         hidesOnDeactivate = false
-        isMovable = false
+        isMovable = true
+        delegate = self
 
         contentView = contentHostingView
     }
@@ -95,6 +101,7 @@ final class ClipboardPanel: NSPanel {
     }
 
     override func close() {
+        finishHeaderDrag()
         pendingResignClose?.cancel()
         pendingResignClose = nil
         removeKeyMonitor()
@@ -140,21 +147,50 @@ final class ClipboardPanel: NSPanel {
 
     private func positionOnScreen() {
         guard let screen = NSScreen.main else { return }
-        let visibleFrame = screen.visibleFrame
         let panelSize = contentView?.fittingSize ?? NSSize(width: ClipboardPanelLayout.listColumnWidth, height: 420)
-        // 列表内容会让 fittingSize 随历史长度增长，这里给面板一个
-        // 有上限的合理尺寸：内容较少时贴合内容，较多时固定并滚动。
-        let height = min(
-            max(panelSize.height, ClipboardPanelLayout.minimumHeight),
-            ClipboardPanelLayout.maximumHeight,
-            visibleFrame.height - 60
+        let next = ClipboardPanelLayout.positionedFrame(
+            contentHeight: panelSize.height,
+            savedPosition: model?.settings.panelPosition,
+            visibleFrames: NSScreen.screens.map(\.visibleFrame),
+            preferredFrame: screen.visibleFrame
         )
-        let width = ClipboardPanelLayout.width(showsPreview: false)
-        // 宁可让面板偏左，也要给详情列留出展开的空间，展开时才不会被顶到屏幕右边缘。
-        let roomForExpansion = visibleFrame.maxX - 12 - ClipboardPanelLayout.width(showsPreview: true)
-        let x = min(visibleFrame.midX - width / 2, max(roomForExpansion, visibleFrame.minX + 12))
-        setContentSize(NSSize(width: width, height: height))
-        setFrameOrigin(NSPoint(x: x, y: visibleFrame.maxY - height - 12))
+        setFrame(next, display: true, animate: false)
+    }
+
+    func dragFromHeader(with event: NSEvent) {
+        isDraggingFromHeader = true
+        windowDrag(self, event)
+        // WindowServer tracks asynchronously; mouse-up may never reach the view.
+        // Wait for the button to be released instead of saving the pre-drag frame.
+        schedulePositionSave()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard isDraggingFromHeader else { return }
+        schedulePositionSave()
+    }
+
+    private func schedulePositionSave() {
+        pendingPositionSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isDraggingFromHeader else { return }
+            if NSEvent.pressedMouseButtons & 1 != 0 {
+                self.schedulePositionSave()
+            } else {
+                self.finishHeaderDrag()
+            }
+        }
+        pendingPositionSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func finishHeaderDrag() {
+        pendingPositionSave?.cancel()
+        pendingPositionSave = nil
+        guard isDraggingFromHeader else { return }
+        isDraggingFromHeader = false
+        model?.rememberPanelPosition(ClipboardPanelPosition(frame: frame))
+        resize(showsPreview: model?.preview.item != nil)
     }
 
     // MARK: - Keyboard
@@ -311,6 +347,10 @@ struct ClipboardPanelContent: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
+                .overlay {
+                    ClipboardPanelDragHandle()
+                        .help(model.t("clipboardDragHint"))
+                }
 
             if model.settings.showSearch {
                 searchField
@@ -475,6 +515,28 @@ struct ClipboardPanelContent: View {
             }
         }
         return labels
+    }
+}
+
+/// Explicit AppKit drag surface: SwiftUI content does not reliably forward
+/// movable-background events through NSHostingView. Only the header receives it.
+private struct ClipboardPanelDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> ClipboardPanelDragHandleView {
+        ClipboardPanelDragHandleView()
+    }
+
+    func updateNSView(_ nsView: ClipboardPanelDragHandleView, context: Context) {}
+}
+
+private final class ClipboardPanelDragHandleView: NSView {
+    override var acceptsFirstResponder: Bool { false }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .openHand)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        (window as? ClipboardPanel)?.dragFromHeader(with: event)
     }
 }
 

@@ -220,6 +220,12 @@ final class ClipboardModel: ObservableObject, ManagedFeature, FeatureResourceRep
 
     // MARK: - Panel
 
+    func rememberPanelPosition(_ position: ClipboardPanelPosition) {
+        guard position.isFinite, settings.panelPosition != position else { return }
+        settings.panelPosition = position
+        persist?()
+    }
+
     func togglePanel() {
         if let panel, panel.isPresented {
             closePanel()

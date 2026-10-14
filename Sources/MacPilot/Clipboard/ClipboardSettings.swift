@@ -23,6 +23,8 @@ struct ClipboardSettings: Codable, Equatable, Sendable {
     var pinsAtTop: Bool
     /// 全局快捷键。
     var hotkey: SmartCaptureShortcutBinding
+    /// 面板左上角的屏幕坐标；未拖动过时沿用默认位置。
+    var panelPosition: ClipboardPanelPosition?
 
     static let defaultHotkey = SmartCaptureShortcutBinding(
         keyCode: UInt16(kVK_ANSI_V),
@@ -36,7 +38,8 @@ struct ClipboardSettings: Codable, Equatable, Sendable {
         showSearch: Bool = true,
         clearSystemClipboardOnClear: Bool = false,
         pinsAtTop: Bool = true,
-        hotkey: SmartCaptureShortcutBinding = ClipboardSettings.defaultHotkey
+        hotkey: SmartCaptureShortcutBinding = ClipboardSettings.defaultHotkey,
+        panelPosition: ClipboardPanelPosition? = nil
     ) {
         self.isEnabled = isEnabled
         self.storageLimit = Self.clampedStorageLimit(storageLimit)
@@ -45,6 +48,7 @@ struct ClipboardSettings: Codable, Equatable, Sendable {
         self.clearSystemClipboardOnClear = clearSystemClipboardOnClear
         self.pinsAtTop = pinsAtTop
         self.hotkey = hotkey.isValid ? hotkey : ClipboardSettings.defaultHotkey
+        self.panelPosition = panelPosition
     }
 
     /// 历史条数上限的唯一裁剪规则（1...1000）。

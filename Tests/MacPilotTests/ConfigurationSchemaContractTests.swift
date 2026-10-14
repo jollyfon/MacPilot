@@ -73,6 +73,18 @@ struct ConfigurationSchemaContractTests {
         )
     }
 
+    @Test func clipboardSettingsEncodeEveryHistoricalKeyIncludingTheSavedPosition() throws {
+        let settings = ClipboardSettings(panelPosition: ClipboardPanelPosition(frame: .zero))
+        try assertEncodedKeys(
+            of: settings,
+            supersetOf: [
+                "isEnabled", "storageLimit", "pasteByDefault", "showSearch",
+                "clearSystemClipboardOnClear", "pinsAtTop", "hotkey", "panelPosition"
+            ]
+        )
+        try assertEncodedKeys(of: settings.panelPosition, supersetOf: ["x", "y"])
+    }
+
     @Test func sessionPolicyEncodesEveryHistoricalKey() throws {
         try assertEncodedKeys(
             of: SessionPolicy.standard,
