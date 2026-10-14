@@ -445,7 +445,7 @@ Refusing authorization request for service kTCCServiceBluetoothAlways
 
 这是个真实的用户可见限制，写在这里以免以后当成玄学：
 
-> 手机换了网络之后，如果遥控 App 一直连不上，**彻底退出重开一次**，而不是切回前台等它自己恢复。
+> **历史临时排查方式，已被后续自动恢复修复取代，不再作为用户操作要求：** 当时手机换网后需要退出重开。2026-09-28 的 `a91e84c` 已在回前台时重建浏览器；2026-10-14 又补上 Mac 端广播注册失败的独立恢复流程。
 
 （顺带确认：`Networking/RemoteDiscoveryService.swift` 的 `includePeerToPeer = true` 与 `.bonjourWithTXTRecord` 组合是正确的，Mac 侧 `RemoteControlServer` 的监听和连接也都开了 P2P；这条链路两头都没有代码改动需要做。）
 
@@ -2151,3 +2151,14 @@ PilotNest 首页「屏幕操作」多一个随航入口，点开是这台 Mac �
 **按发布纪律，这条文档提交自己也发了一个 beta：`v1.2.2-beta.1`。** 这正是上面版本号那段要的自洽——stable tag 之后 `MACPILOT_CHANNEL=beta zsh Scripts/version.sh` 从 HEAD 报的就是 `1.2.2-beta.1`。流程照旧：push `d85090b` → 等 `build.yml` 在**这个 SHA** 上绿（run 38425579759，`signed-test` 正确 skipped）→ 打 tag → `Release Beta` run 38427515076 成功。四个资产齐（arm64 ZIP 9,420,803／x86_64 ZIP 9,827,368／DMG 21,676,742／清单 176），`isPrerelease=true`、`isDraft=false`，而 **Latest 指针仍然停在 `v1.2.1`**——正式与预发布同一天并存之后，这是唯一还会误导人的地方：`--prerelease --latest=false` 保证 beta 不会把正式版从下载入口上顶掉。同一份 `dist` 日志里 `-1005` 又出现一次，这次在第一级阶梯（10 秒）就过去了。（再下一条文档提交发的 `v1.2.2-beta.2` 是四次 `dist` 里唯一一次没撞上的，四个资产齐，Latest 依旧停在 `v1.2.1`。）
 
 **⚠️ 正式发出去不等于用户升上去了。** 四个资产的 `downloadCount` 发布当时都还是 0，Mac 侧没有装机分布可查（GitHub 只给下载次数），iOS 侧 `asc testflight metrics group-testers` 这天给的是 `attributes:null`（§七十五 记过）。剩下的仍然只是 §七十五 那 6 条真机清单：勾掉 1–4 才能把「扫描不出来」正式结案，而这次它有了正式版这条路——验收机器不必再停在 beta。
+
+
+## 2026-10-14：已配对 PilotNest 再次连不上，Mac 广播恢复遗漏
+
+之前几次“连接修复”覆盖的是不同阶段：`a91e84c` 重建手机回前台后的浏览器，`ed06173` 保留较慢的 AWDL 候选，`31ab01d` 补手机端 PolicyDenied 提示、手动重试和动态蓝牙 PSM。最后一次文档已明确指出“权限已允许仍可能广播被拒绝”，但没有修复 Mac 的广播注册与自动恢复，不能把这些提交当作整个连接链路已获得长期可用性保证。
+
+本次本机 MacPilot 1.2.1（666）在 08:37:25 注册 `_macpilot._tcp` 时收到 `PolicyDenied`，随后却记录服务启动，43847 端口一直正常监听，独立浏览没有发现该服务。只读核对系统归档中当前用户对应的 MacPilot 规则为 `MulticastPreferenceSet=true`、`DenyMulticast=false`，所以不能归咎于用户关掉许可。同一时段系统正在重建网络隐私规则；这与瞬时拒绝相关，但不足以证明系统拒绝的全部原因。蓝牙能发现手机但 L2CAP 建立失败，是另一条未通过的备用路径，不能把发现广播恢复等同于蓝牙真机问题已解决。
+
+Mac 现在由 `RemoteBonjourPublisher` 独立注册实际监听端口，保留 P2P/AWDL，只在注册 Add 成功后显示发现服务可用。被拒绝或注册失败时每三秒自动重试广播，保留 TCP 监听、已认证连接、蓝牙和配对密钥。首页与远程控制页显示准确原因，首次启用打开设置页并解释系统授权，中文系统提示通过 InfoPlist.strings 提供。恢复后清除过时的权限提示。权限重置、反复重启和删除配对都不是正常恢复流程。
+
+回归测试覆盖端口 ready 但广播失败、授权后恢复、连续三次失败后恢复、停用取消重试、旧回调不能覆盖新注册，以及 TXT 身份与能力兼容；重试时钟可注入，不靠墙钟等待。GitHub 的必要测试筛选已加入该套件。修复代码与测试通过，不代表原手机已完成真实连接验收；正式安装不自动替换，升级后仍需确认 LAN/AWDL 的实际认证会话。

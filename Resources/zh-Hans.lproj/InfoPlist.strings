@@ -1,0 +1,1 @@
+"NSLocalNetworkUsageDescription" = "MacPilot 需要访问本地网络，让 PilotNest 发现附近的这台 Mac 并安全连接，使用远程控制。连接仅在你的设备之间建立，不上传到互联网。";

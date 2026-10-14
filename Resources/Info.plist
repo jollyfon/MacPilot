@@ -60,7 +60,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>MacPilot uses the microphone to record narration as a separate audio track in screen recordings. Audio stays on your Mac.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>MacPilot publishes a local-network service so a paired iPhone on the same Wi-Fi network can lock, blank, unlock and wake this Mac. Nothing is sent to the internet.</string>
+	<string>MacPilot needs local network access so PilotNest can discover this nearby Mac and connect securely for remote control. Connections stay between your devices; nothing is sent to the internet.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_macpilot._tcp</string>

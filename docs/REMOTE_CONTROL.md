@@ -599,6 +599,21 @@ discarding stale discovered endpoints without deleting the selected Mac or its
 pairing key. An allowed Local Network toggle is not proof of a working AWDL
 broadcast: macOS can still reject Bonjour registration with `PolicyDenied`.
 
+On the Mac, socket readiness and service publication are separate states.
+`RemoteBonjourPublisher` registers the listener's actual port through DNS-SD
+with both `IncludeP2P` and `IncludeAWDL`. Only a successful registration Add
+callback marks discovery available. This avoids an `NWListener.ready` masking
+an internal advertiser's `PolicyDenied`. Registration failures surface on Home
+and Remote Control; policy rejection offers the Local Network settings entry.
+Enabling Remote Control opens its setup page and explains the first-use system
+permission prompt. A previously allowed app can also receive a policy error
+while macOS updates network privacy rules, so the UI describes the rejected
+operation rather than assuming the user disabled permission. Failed publication
+is retried every three seconds until registration succeeds or the feature stops.
+The retry replaces only the advertisement, preserving the listener, authenticated
+connections, Bluetooth, and paired keys. Success clears pending network guidance.
+No permission reset, app restart, or re-pairing is part of recovery.
+
 The Bluetooth PSM characteristic is dynamic: it returns the currently published
 channel number, and returns no value after that publication is stopped. The Mac
 backs off repeated channel-open failures (2/4/8/16/30 seconds) until a channel

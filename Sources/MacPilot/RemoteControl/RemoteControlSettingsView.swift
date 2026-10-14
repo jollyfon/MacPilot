@@ -23,6 +23,7 @@ struct RemoteControlSettingsView: View {
                 deviceCard
                 mobileAppCard
                 if deviceStore.settings.isEnabled {
+                    RemoteLocalNetworkNotice(server: server)
                     pairingCard
                     devicesCard
                     statusCard
@@ -65,6 +66,7 @@ struct RemoteControlSettingsView: View {
                     .disabled(deviceNameDraft.trimmingCharacters(in: .whitespacesAndNewlines) == deviceStore.deviceName)
             }
             Text(t("remoteDeviceNameHint")).font(.caption).foregroundStyle(.secondary)
+            Text(t("remoteNetworkPermissionHint")).font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -206,8 +208,8 @@ struct RemoteControlSettingsView: View {
             .macPilotProminentButtonStyle()
             statusRow(
                 t("remoteLocalNetwork"),
-                value: server.status.isRunning ? t("remoteAvailable") : t("remoteUnavailable"),
-                tint: server.status.isRunning ? .green : .secondary
+                value: networkStatusText,
+                tint: server.bonjourStatus == .available ? .green : .orange
             )
             statusRow(
                 t("remoteScreenState"),
@@ -265,9 +267,19 @@ struct RemoteControlSettingsView: View {
         }
     }
 
+    private var networkStatusText: String {
+        switch server.bonjourStatus {
+        case .stopped: return t("remoteUnavailable")
+        case .registering: return t("remoteNetworkRegistering")
+        case .available: return t("remoteAvailable")
+        case .permissionDenied: return t("remoteNetworkPermissionDenied")
+        case .failed(let code): return t("remoteNetworkFailed", code)
+        }
+    }
+
     private var statusTint: Color {
         switch server.status {
-        case .running: return .green
+        case .running: return server.bonjourStatus == .available ? .green : .orange
         case .starting: return .orange
         case .stopped: return .secondary
         case .failed: return .red

@@ -34,6 +34,9 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
     @Published private(set) var status: Status = .stopped
     @Published private(set) var connectedDeviceNames: [String] = []
     @Published private(set) var lastError: String?
+    @Published private(set) var bonjourStatus: RemoteBonjourStatus = .stopped
+    var onLocalNetworkPermissionDenied: (@MainActor () -> Void)?
+    var onLocalNetworkAvailable: (@MainActor () -> Void)?
 
     let deviceStore: RemoteDeviceStore
     let pairingManager: RemotePairingManager
@@ -65,6 +68,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
     /// instantiates a CoreBluetooth central just to shut it down.
     private var bleCentralStarted = false
     private let logHandler: (String) -> Void
+    private let bonjourPublisher: RemoteBonjourPublisher
 
     /// Second link, for when there is no usable network between the two
     /// machines. Deliberately independent of the Bonjour listener: it starts
@@ -89,6 +93,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
         pairingManager: RemotePairingManager? = nil,
         dockGroups: (any RemoteDockGroupsHosting)? = nil,
         sidecar: (any RemoteSidecarHosting)? = nil,
+        bonjourPublisher: RemoteBonjourPublisher = RemoteBonjourPublisher(),
         log: @escaping (String) -> Void = { remoteControlLog($0) }
     ) {
         self.deviceStore = deviceStore
@@ -96,10 +101,18 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
         self.dockGroups = dockGroups
         self.sidecar = sidecar
         self.logHandler = log
+        self.bonjourPublisher = bonjourPublisher
         self.inputCoordinator = RemoteInputCoordinator(log: log)
         self.pairingManager = pairingManager ?? RemotePairingManager(log: log)
         self.pairingManager.onCodePresented = { [weak self] code, name in
             self?.onPairingCodePresented?(code, name)
+        }
+        bonjourPublisher.onStatusChanged = { [weak self] status in
+            guard let self else { return }
+            self.bonjourStatus = status
+            self.log("Bonjour registration status=\(status)")
+            if status == .permissionDenied { self.onLocalNetworkPermissionDenied?() }
+            if status == .available { self.onLocalNetworkAvailable?() }
         }
     }
 
@@ -149,6 +162,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
     }
 
     func stop() {
+        bonjourPublisher.stop()
         listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
@@ -195,35 +209,38 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
         } else {
             listener = try NWListener(using: parameters)
         }
-        let info = RemoteServiceInfo(
-            deviceID: deviceStore.deviceID,
-            name: deviceStore.deviceName,
-            version: AppVersionInfo.current().version.description,
-            capabilities: Set(advertisedCapabilities + [.remoteDesktop])
-        )
-        listener.service = NWListener.Service(
-            name: Self.bonjourName(from: info.name),
-            type: RemoteProtocolVersion.bonjourServiceType,
-            txtRecord: NWTXTRecord(info.txtRecord())
-        )
+        // Register separately: NWListener's ready state only confirms the socket,
+        // and its internal advertiser can silently fail with PolicyDenied.
         return listener
     }
 
     private func configure(_ listener: NWListener) {
-        listener.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in self?.handleListenerState(state) }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            Task { @MainActor [weak listener] in
+                guard let self, let listener, self.listener === listener else { return }
+                self.handleListenerState(state)
+            }
         }
         listener.newConnectionHandler = { [weak self] connection in
             Task { @MainActor in self?.accept(connection) }
         }
     }
 
-    private func handleListenerState(_ state: NWListener.State) {
+    // Internal so tests exercise the real listener -> advertiser -> UI path
+    // without opening sockets, starting Bluetooth, or controlling the screen.
+    func handleListenerState(_ state: NWListener.State) {
         switch state {
         case .ready:
             let port = listener?.port?.rawValue ?? 0
             status = .running(port: port)
-            log("server started port=\(port) name=\(deviceStore.deviceName)")
+            let info = RemoteServiceInfo(
+                deviceID: deviceStore.deviceID,
+                name: deviceStore.deviceName,
+                version: AppVersionInfo.current().version.description,
+                capabilities: Set(advertisedCapabilities + [.remoteDesktop])
+            )
+            bonjourPublisher.start(name: Self.bonjourName(from: info.name), port: port, txtRecord: info.txtRecord())
+            log("server listening port=\(port) name=\(deviceStore.deviceName); awaiting Bonjour registration")
         case .failed(let error):
             if case let .posix(code) = error, code == .EADDRINUSE, !isUsingDynamicPort {
                 log("preferred port in use; falling back to a dynamic port")
@@ -239,6 +256,7 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
                 return
             }
             status = .failed(error.localizedDescription)
+            bonjourPublisher.stop()
             lastError = error.localizedDescription
             log("listener failed error=\(error.localizedDescription)")
         case .cancelled:

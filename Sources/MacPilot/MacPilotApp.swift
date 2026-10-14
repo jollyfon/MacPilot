@@ -570,11 +570,18 @@ enum AppText {
         "remoteStatus": "服务状态",
         "remoteStatusStopped": "已关闭",
         "remoteStatusStarting": "正在启动…",
-        "remoteStatusRunning": "可连接 · 端口 %d",
+        "remoteStatusRunning": "监听中 · 端口 %d",
         "remoteStatusFailed": "启动失败：%@",
         "remoteAccessibility": "辅助功能",
         "remoteCredential": "解锁密码",
         "remoteLocalNetwork": "局域网服务",
+        "remoteNetworkRegistering": "正在确认设备发现…",
+        "remoteNetworkPermissionDenied": "设备发现被系统阻止",
+        "remoteNetworkFailed": "设备发现暂不可用 · 错误 %d",
+        "remoteNetworkPermissionHint": "MacPilot 需要本地网络权限，才能让 PilotNest 发现并连接这台 Mac。首次使用时，请在系统提示中选择“允许”。",
+        "remoteNetworkDeniedHint": "系统暂时拒绝了 MacPilot 的设备发现请求，正在自动重试。如果出现本地网络授权提示，请选择“允许”；如果此前拒绝过，可在“隐私与安全 → 本地网络”中授权。恢复后 PilotNest 可再次发现本机，已有配对会保留。",
+        "remoteNetworkFailedHint": "MacPilot 暂时无法发布设备发现服务，正在自动重试。已有配对会保留。",
+        "remoteOpenLocalNetworkSettings": "打开本地网络设置",
         "remoteScreenState": "屏幕状态",
         "remoteGranted": "已授权",
         "remoteNotGranted": "未授权",
@@ -1777,11 +1784,18 @@ enum AppText {
             "remoteStatus": "Service",
             "remoteStatusStopped": "Off",
             "remoteStatusStarting": "Starting…",
-            "remoteStatusRunning": "Reachable · port %d",
+            "remoteStatusRunning": "Listening · port %d",
             "remoteStatusFailed": "Failed to start: %@",
             "remoteAccessibility": "Accessibility",
             "remoteCredential": "Unlock password",
             "remoteLocalNetwork": "Local network",
+            "remoteNetworkRegistering": "Checking device discovery…",
+            "remoteNetworkPermissionDenied": "Discovery blocked by the system",
+            "remoteNetworkFailed": "Discovery unavailable · error %d",
+            "remoteNetworkPermissionHint": "MacPilot needs local network access so PilotNest can discover and connect to this Mac. Choose Allow in the system prompt when using it for the first time.",
+            "remoteNetworkDeniedHint": "The system blocked MacPilot's discovery request. MacPilot is retrying automatically. Choose Allow if a local network prompt appears. If you previously denied access, allow it in Privacy & Security → Local Network. Discovery resumes automatically and existing pairings are kept.",
+            "remoteNetworkFailedHint": "MacPilot cannot publish its discovery service right now and is retrying automatically. Existing pairings are kept.",
+            "remoteOpenLocalNetworkSettings": "Open Local Network Settings",
             "remoteScreenState": "Screen",
             "remoteGranted": "Granted",
             "remoteNotGranted": "Not granted",
@@ -2291,6 +2305,7 @@ final class MacPilotModel: ObservableObject {
     @Published var alertMessage: String?
     @Published private(set) var alertOffersAccessibilitySettings = false
     @Published private(set) var alertOffersAccessibilityReset = false
+    @Published private(set) var alertOffersLocalNetworkSettings = false
     @Published private(set) var isResettingAccessibility = false
     @Published private(set) var isResettingScreenCapture = false
     /// Whether the user wants MacPilot to start at login (persisted), not the
@@ -2467,6 +2482,15 @@ final class MacPilotModel: ObservableObject {
         }
         remoteControl.onRunningStateChanged = { [weak self] in
             self?.refreshScreenStateObservation()
+        }
+        remoteControl.onLocalNetworkPermissionDenied = { [weak self] in
+            guard let self else { return }
+            self.showAlert(self.t("remoteNetworkDeniedHint"))
+            self.alertOffersLocalNetworkSettings = true
+        }
+        remoteControl.onLocalNetworkAvailable = { [weak self] in
+            guard let self, self.alertOffersLocalNetworkSettings else { return }
+            self.dismissAlert()
         }
         remoteDeviceStore.onPairedIdentitiesChanged = { [weak self] in
             guard let self else { return }
@@ -2772,6 +2796,7 @@ final class MacPilotModel: ObservableObject {
     }
 
     private func showWindowControlGuidance() {
+        alertOffersLocalNetworkSettings = false
         alertOffersAccessibilitySettings = true
         alertOffersAccessibilityReset = true
         alertMessage = t("accessibilityRequired", Bundle.main.bundleURL.path)
@@ -2864,6 +2889,7 @@ final class MacPilotModel: ObservableObject {
         alertMessage = nil
         alertOffersAccessibilitySettings = false
         alertOffersAccessibilityReset = false
+        alertOffersLocalNetworkSettings = false
     }
 
     /// Surfaces a newly derived pairing code: brings the main window forward on
@@ -2877,6 +2903,7 @@ final class MacPilotModel: ObservableObject {
     func showAlert(_ message: String) {
         alertOffersAccessibilitySettings = false
         alertOffersAccessibilityReset = false
+        alertOffersLocalNetworkSettings = false
         alertMessage = message
     }
 
@@ -3860,6 +3887,7 @@ extension MacPilotModel {
             ble.setEnabled(true)
         case .remoteControl:
             remoteDeviceStore.setEnabled(true)
+            requestSection(.remoteControl)
         case .inputSources:
             inputSources.setEnabled(true)
         case .capture:
@@ -4118,6 +4146,12 @@ struct ContentView: View {
             if model.alertOffersAccessibilitySettings {
                 Button(model.t("openAccessibilitySettings")) {
                     model.openAccessibilitySettings()
+                    model.dismissAlert()
+                }
+            }
+            if model.alertOffersLocalNetworkSettings {
+                Button(model.t("remoteOpenLocalNetworkSettings")) {
+                    RemoteLocalNetworkNotice.openSettings()
                     model.dismissAlert()
                 }
             }

@@ -21,6 +21,7 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 24) {
                 header
                 summaryCard
+                RemoteLocalNetworkNotice(server: model.remoteControl)
                 featureGroup(titleKey: "homeAutomation", sections: MainSection.automationSections)
                 featureGroup(titleKey: "homeUtilities", sections: MainSection.utilitySections)
             }
