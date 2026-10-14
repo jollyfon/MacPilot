@@ -13,6 +13,7 @@ final class BLEMonitoredDeviceRuntime {
     var connectionRetryGate = BLEConnectionRetryGate()
     var proximityTimer: BackgroundTask?
     var signalTimer: BackgroundTask?
+    var signalTimerGeneration: UInt64 = 0
     var activeModeTimer: BackgroundTask?
     var connectionTimer: BackgroundTask?
     var rssiRequestTimeoutTimer: BackgroundTask?
@@ -26,6 +27,7 @@ final class BLEMonitoredDeviceRuntime {
         proximityTimer = nil
         signalTimer?.stop()
         signalTimer = nil
+        signalTimerGeneration &+= 1
         activeModeTimer?.stop()
         activeModeTimer = nil
         connectionTimer?.stop()

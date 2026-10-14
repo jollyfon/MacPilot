@@ -359,6 +359,95 @@ struct BLEMonitoringRestorationTests {
         #expect(model.diagnosticTaskCount == taskCount - 1)
     }
 
+    @Test func preWakeTimeoutCallbacksCannotCancelAColdReconnectOrClearANewSignal() throws {
+        let scanner = RecordingBluetoothScanner()
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: scanner
+        )
+        defer { model.shutdown() }
+        var timeouts: [(delay: TimeInterval, action: @MainActor () -> Void)] = []
+        model.signalTimeoutScheduler = { delay, action in
+            timeouts.append((delay, action))
+            return BackgroundTask()
+        }
+        let workspaceCenter = NotificationCenter()
+        model.workspaceNotificationCenterOverride = workspaceCenter
+        model.displayUnavailableProbe = { false }
+        model.settings.isEnabled = true
+        model.settings.signalTimeout = 30
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+        model.startObservingSystemState()
+        let phone = UUID()
+        model.startMonitor(phone)
+        model.updateMonitoredPeripheral(-50, for: phone)
+        let preSleepTimeout = try #require(timeouts.last)
+        #expect(preSleepTimeout.delay == 30)
+        workspaceCenter.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        workspaceCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        let wakeTimeout = try #require(timeouts.last)
+        #expect(wakeTimeout.delay >= BLEConnectionRetryGate.connectionTimeout)
+        #expect(!model.presence)
+        preSleepTimeout.action()
+        #expect(scanner.centralResets == 0, "An overdue pre-sleep callback must not replace the wake session")
+        model.updateMonitoredPeripheral(-50, for: phone)
+        #expect(model.presence)
+        #expect(timeouts.last?.delay == 30, "A fresh sample returns to the configured freshness limit")
+        wakeTimeout.action()
+        #expect(model.presence, "The replaced wake timer must not discard newly received RSSI")
+        #expect(scanner.centralResets == 0)
+    }
+
+    @Test func signalTimeoutRecoveryResetsOnceAndBothScanRetriesPreserveTheNewSession() async {
+        let scanner = RecordingBluetoothScanner()
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: scanner
+        )
+        defer { model.shutdown() }
+        model.displayUnavailableProbe = { false }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+        let delays = AsyncStream<TimeInterval>.makeStream()
+        let scans = AsyncStream<Int>.makeStream()
+        var sleepContinuation: CheckedContinuation<Void, Never>?
+        model.monitoringRecoverySleep = { delay in
+            await withCheckedContinuation { continuation in
+                sleepContinuation = continuation
+                delays.continuation.yield(delay)
+            }
+        }
+        scanner.onScanRestart = { scans.continuation.yield(scanner.scanRestarts) }
+        defer {
+            sleepContinuation?.resume()
+            delays.continuation.finish()
+            scans.continuation.finish()
+            scanner.onScanRestart = nil
+        }
+        let phone = UUID()
+        model.startMonitor(phone)
+        model.handleMonitoredSignalTimeout(for: phone)
+        #expect(scanner.centralResets == 1)
+        var delayIterator = delays.stream.makeAsyncIterator()
+        let firstDelay = await delayIterator.next()
+        #expect(firstDelay == 3)
+        sleepContinuation?.resume()
+        sleepContinuation = nil
+        let secondDelay = await delayIterator.next()
+        #expect(secondDelay == 7)
+        #expect(scanner.centralResets == 1, "The three-second retry must preserve the cold connection")
+        sleepContinuation?.resume()
+        sleepContinuation = nil
+        var scanIterator = scans.stream.makeAsyncIterator()
+        let firstScan = await scanIterator.next()
+        let secondScan = await scanIterator.next()
+        #expect(firstScan == 1)
+        #expect(secondScan == 2)
+        #expect(scanner.centralResets == 1, "The ten-second retry must also preserve the session")
+    }
+
     @Test func absentSecondaryDoesNotResetAFreshPrimaryInAnyDeviceMode() {
         let primary = UUID()
         let secondary = UUID()
@@ -656,10 +745,12 @@ private final class RecordingBluetoothScanner: BluetoothScanning {
     }
     private(set) var scanRestarts = 0
     private(set) var centralResets = 0
+    var onScanRestart: (() -> Void)?
     func createIfNeeded(delegate: CBCentralManagerDelegate) {}
     func startIfPoweredOn() -> Bool { true }
     func restartIfPoweredOn() -> Bool {
         scanRestarts += 1
+        onScanRestart?()
         return true
     }
     func stop() {}

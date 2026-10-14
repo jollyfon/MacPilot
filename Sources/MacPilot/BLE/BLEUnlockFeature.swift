@@ -115,6 +115,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     var monitoringRecoverySleep: @MainActor (TimeInterval) async -> Void = { delay in
         try? await Task.sleep(for: .milliseconds(Int64(delay * 1_000)))
     }
+    var signalTimeoutScheduler: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> BackgroundTask = {
+        BackgroundTask.once(after: $0, action: $1)
+    }
     private var unlockAttemptTask: Task<Void, Never>?
     private var unlockAttemptSlot = BLEUnlockAttemptSlot()
     private var unlockSignalTrigger = BLEUnlockSignalTrigger()
@@ -784,11 +787,18 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         startConfiguredMonitoring()
     }
 
-    private func resetSignalTimer(for uuid: UUID) {
+    private func resetSignalTimer(for uuid: UUID, minimumDelay: TimeInterval = 0) {
         guard let runtime = runtime(for: uuid) else { return }
         runtime.signalTimer?.stop()
-        runtime.signalTimer = BackgroundTask.once(after: TimeInterval(settings.signalTimeout)) { [weak self] in
-            self?.handleMonitoredSignalTimeout(for: uuid)
+        runtime.signalTimerGeneration &+= 1
+        let generation = runtime.signalTimerGeneration
+        runtime.signalTimer = signalTimeoutScheduler(max(TimeInterval(settings.signalTimeout), minimumDelay)) { [weak self, weak runtime] in
+            guard let self, let runtime else { return }
+            guard self.runtime(for: uuid) === runtime, runtime.signalTimerGeneration == generation else {
+                self.log("signal timeout ignored reason=superseded uuid=\(uuid.uuidString)")
+                return
+            }
+            self.handleMonitoredSignalTimeout(for: uuid)
         }
     }
 
@@ -935,6 +945,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         runtime.connectionTimer = BackgroundTask.once(after: BLEConnectionRetryGate.connectionTimeout) { [weak self] in
             guard let self, let runtime = self.runtime(for: uuid),
                   let peripheral = runtime.peripheral, peripheral.state == .connecting else { return }
+            self.log("connection timed out uuid=\(uuid.uuidString) timeout=\(BLEConnectionRetryGate.connectionTimeout); cancelling pending connection")
             self.centralMgr?.cancelPeripheralConnection(peripheral)
             runtime.connectionTimer = nil
         }
@@ -1725,6 +1736,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 runtime.presence = false
                 runtime.proximityTimer?.stop()
                 runtime.proximityTimer = nil
+                // The pre-sleep deadline must not interrupt the cold reconnect.
+                // Presence stays false; this extends recovery, never RSSI validity.
+                resetSignalTimer(for: runtime.uuid, minimumDelay: BLEConnectionRetryGate.connectionTimeout)
             }
             presence = false
             refreshPublishedMonitoringState()
@@ -1732,15 +1746,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         startMonitoringRecovery(reason: "displayWake", restartImmediately: true)
     }
 
-    private func restartMonitoringAfterRecovery(reason: String) {
+    private func restartMonitoringAfterRecovery(reason: String, resetCentral: Bool) {
         guard settings.isEnabled, hasMonitoredDevice, !systemSleep else { return }
-        if reason == "displayWake" {
+        if reason == "displayWake" || !resetCentral || activeConnectionsPaused {
             // Discover immediately using the existing session. Recreating the
             // central here (and again at 3/10 seconds) cancels the connections
             // that the wake transition has just started restoring.
             ensureCentralManager()
             let scanning = bluetoothScanner.restartIfPoweredOn()
-            log("display wake scan \(scanning ? "restarted" : "deferred") preservingConnections=true")
+            let event = reason == "displayWake" ? "display wake scan" : "monitoring recovery scan"
+            log("\(event) \(scanning ? "restarted" : "deferred") preservingConnections=true reason=\(reason)")
             if let central = centralMgr, central.state == .poweredOn {
                 restoreKnownMonitoredPeripherals(using: central)
             }
@@ -1788,7 +1803,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
         let restartDelays: [TimeInterval]
         if restartImmediately {
-            restartMonitoringAfterRecovery(reason: reason)
+            restartMonitoringAfterRecovery(reason: reason, resetCentral: true)
             guard !monitoringHasFreshSignal else { return }
             restartDelays = plan.restartDelays.filter { $0 > 0 }
         } else {
@@ -1805,7 +1820,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 }
                 guard !Task.isCancelled, let self else { return }
                 guard !self.monitoringHasFreshSignal else { break }
-                self.restartMonitoringAfterRecovery(reason: reason)
+                // Only the first checkpoint can replace a broken session.
+                // Retrying discovery at 3/10s must not cancel a 60s connection.
+                self.restartMonitoringAfterRecovery(reason: reason, resetCentral: deadline == 0)
                 previousDeadline = deadline
             }
             self?.monitoringRecoveryTask = nil
