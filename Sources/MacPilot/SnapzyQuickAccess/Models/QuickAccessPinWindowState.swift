@@ -22,6 +22,9 @@ final class QuickAccessPinWindowState: ObservableObject {
   @Published private(set) var text: String?
   @Published var isLocked = false
   @Published var isMouseInside = false
+  /// Corner shape of the pin's own window.  Published because it is drawn twice:
+  /// SwiftUI clips the image with it and the AppKit panel shapes its shadow.
+  @Published var cornerStyle: ScreenCapturePinCornerStyle = .rounded
   /// Whether the pointer is inside the locked pin's top-trailing hotspot.  Only
   /// that square is clickable while the image lets the mouse through, so the
   /// unlock control is drawn exactly there and nowhere else.

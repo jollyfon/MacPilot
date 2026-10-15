@@ -694,8 +694,13 @@ final class UncheckedEventBox: @unchecked Sendable {
 // MARK: - NSWindow + CornerRadius (Snapzy's window styling extension)
 
 extension NSWindow {
-    /// Default corner radius for app windows
-    static let defaultCornerRadius: CGFloat = 24
+    /// Default corner radius for app windows.
+    ///
+    /// `nonisolated` because a stored style setting (`ScreenCapturePinCornerStyle`)
+    /// is pure value data that has to answer its own geometry without a main-actor
+    /// hop — a release build with whole-module concurrency checking otherwise
+    /// rejects the reference out of `Sendable` types.
+    nonisolated static let defaultCornerRadius: CGFloat = 24
 
     /// Apply custom corner radius to the window
     /// - Parameter radius: The corner radius to apply (default: 24)

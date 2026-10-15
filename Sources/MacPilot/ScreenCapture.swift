@@ -42,6 +42,25 @@ enum ScreenCaptureImageFormat: String, CaseIterable, Codable, Identifiable, Send
     var supportsQuality: Bool { self != .png }
 }
 
+// MARK: - Pin Corner Style
+
+/// Corner geometry of a pinned screenshot ("贴图") window. `rounded` keeps the
+/// native window radius; `square` removes the rounding from the image clip and
+/// from the window's own shadow.
+enum ScreenCapturePinCornerStyle: String, CaseIterable, Codable, Identifiable, Sendable {
+    case rounded
+    case square
+
+    var id: String { rawValue }
+
+    var cornerRadius: CGFloat {
+        switch self {
+        case .rounded: return NSWindow.defaultCornerRadius
+        case .square: return 0
+        }
+    }
+}
+
 // MARK: - Settings
 
 struct ScreenCaptureSettings: Codable, Equatable, Sendable {
@@ -77,6 +96,8 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
     var copyAfterCapture: Bool
     var showQuickAccess: Bool
     var pinAfterCapture: Bool
+    /// 贴图窗口的边角形状：圆角（系统窗口半径）或直角。
+    var pinCornerStyle: ScreenCapturePinCornerStyle
     var imageHosting: ImageHostingSettings
 
     init(
@@ -111,6 +132,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         copyAfterCapture: Bool = true,
         showQuickAccess: Bool = true,
         pinAfterCapture: Bool = false,
+        pinCornerStyle: ScreenCapturePinCornerStyle = .rounded,
         imageHosting: ImageHostingSettings = ImageHostingSettings(),
         migrateLegacyScreenshotShortcuts: Bool = false
     ) {
@@ -154,6 +176,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         self.copyAfterCapture = copyAfterCapture
         self.showQuickAccess = showQuickAccess
         self.pinAfterCapture = pinAfterCapture
+        self.pinCornerStyle = pinCornerStyle
         self.imageHosting = imageHosting
     }
 
@@ -163,7 +186,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
         case maxRetentionDays, captureAllDisplays, showsCursor, smartCaptureEnabled
         case smartCaptureShortcut, areaCaptureShortcut, repeatAreaCaptureShortcut, delayedAreaCaptureShortcut, delayedCaptureSeconds, applicationWindowCaptureShortcut, fullscreenCaptureShortcut, activeWindowCaptureShortcut, areaAnnotateShortcut, ocrShortcut, scrollingCaptureShortcut, objectCutoutShortcut, pinCaptureShortcut, postSelectionPinShortcut
         case screenshotEnabled
-        case saveAfterCapture, copyAfterCapture, showQuickAccess, pinAfterCapture, imageHosting
+        case saveAfterCapture, copyAfterCapture, showQuickAccess, pinAfterCapture, pinCornerStyle, imageHosting
     }
 
     init(from decoder: Decoder) throws {
@@ -200,6 +223,7 @@ struct ScreenCaptureSettings: Codable, Equatable, Sendable {
             copyAfterCapture: try c.decodeIfPresent(Bool.self, forKey: .copyAfterCapture) ?? true,
             showQuickAccess: try c.decodeIfPresent(Bool.self, forKey: .showQuickAccess) ?? true,
             pinAfterCapture: try c.decodeIfPresent(Bool.self, forKey: .pinAfterCapture) ?? false,
+            pinCornerStyle: try c.decodeIfPresent(ScreenCapturePinCornerStyle.self, forKey: .pinCornerStyle) ?? .rounded,
             imageHosting: try c.decodeIfPresent(ImageHostingSettings.self, forKey: .imageHosting) ?? ImageHostingSettings(),
             migrateLegacyScreenshotShortcuts: true
         )
@@ -655,6 +679,7 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
         isLoading = true
         settings = newSettings
         CloudManager.shared.apply(settings: newSettings.imageHosting)
+        QuickAccessPinWindowManager.shared.cornerStyle = newSettings.pinCornerStyle
         if let smartCapture {
             smartCapture.updateShortcutBinding(newSettings.smartCaptureShortcut)
             smartCapture.updateAdditionalShortcutBindings([
@@ -788,6 +813,11 @@ final class ScreenCaptureModel: ObservableObject, ManagedFeature {
 
     func setPinAfterCapture(_ value: Bool) {
         updateSettings { $0.pinAfterCapture = value }
+    }
+
+    func setPinCornerStyle(_ style: ScreenCapturePinCornerStyle) {
+        updateSettings { $0.pinCornerStyle = style }
+        QuickAccessPinWindowManager.shared.cornerStyle = style
     }
 
     func setDelayedCaptureSeconds(_ seconds: Int) {
@@ -2189,6 +2219,22 @@ struct ScreenCaptureView: View {
                 set: { capture.setPinAfterCapture($0) }
             ))
             .toggleStyle(.checkbox)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(t("scPinCornerStyle"))
+                Picker(t("scPinCornerStyle"), selection: Binding(
+                    get: { capture.settings.pinCornerStyle },
+                    set: { capture.setPinCornerStyle($0) }
+                )) {
+                    ForEach(ScreenCapturePinCornerStyle.allCases) { style in
+                        Text(pinCornerStyleLabel(style)).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text(t("scPinCornerStyleHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Text(t("scSmartCaptureResources"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -2670,6 +2716,13 @@ struct ScreenCaptureView: View {
         case .heic: return t("scFormatHEIC")
         case .jpeg: return t("scFormatJPEG")
         case .png: return t("scFormatPNG")
+        }
+    }
+
+    private func pinCornerStyleLabel(_ style: ScreenCapturePinCornerStyle) -> String {
+        switch style {
+        case .rounded: return t("scPinCornerRounded")
+        case .square: return t("scPinCornerSquare")
         }
     }
 

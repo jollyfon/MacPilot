@@ -22,7 +22,10 @@ struct QuickAccessPinWindowView: View {
   @State private var isFileDragActive = false
   @State private var isPointerInZoomHUDZone = false
 
-  private let cornerRadius = NSWindow.defaultCornerRadius
+  /// The pin's radius is the setting's, not a constant: a square pin must clip
+  /// the image and draw its hairline with square corners, or the window's own
+  /// rounding would show through as four white nicks in the corners.
+  private var cornerRadius: CGFloat { state.cornerStyle.cornerRadius }
 
   var body: some View {
     ZStack {

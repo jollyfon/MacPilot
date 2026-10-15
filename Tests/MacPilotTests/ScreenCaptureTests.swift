@@ -316,6 +316,23 @@ struct ScreenCaptureTests {
         #expect(legacy.saveAfterCapture)
     }
 
+    @Test func pinCornerStyleKeepsRoundedCornersForOlderConfigurations() throws {
+        // 升级前存下来的配置没有这个键，贴图必须还是圆角，不能莫名变成直角。
+        let legacy = try JSONDecoder().decode(ScreenCaptureSettings.self, from: Data("{}".utf8))
+        #expect(legacy.pinCornerStyle == .rounded)
+        #expect(ScreenCaptureSettings().pinCornerStyle == .rounded)
+
+        // 直角就是真的直角：圆角值仍然是系统窗口半径，两份半径各自有主。
+        #expect(ScreenCapturePinCornerStyle.rounded.cornerRadius == NSWindow.defaultCornerRadius)
+        #expect(ScreenCapturePinCornerStyle.square.cornerRadius == 0)
+
+        let roundTrip = try JSONDecoder().decode(
+            ScreenCaptureSettings.self,
+            from: JSONEncoder().encode(ScreenCaptureSettings(pinCornerStyle: .square))
+        )
+        #expect(roundTrip.pinCornerStyle == .square)
+    }
+
     @Test func quickAccessStackKeepsTheFiveNewestItemsInOrder() {
         var stack = SmartQuickAccessStackState()
         let ids = (0..<6).map { _ in UUID() }

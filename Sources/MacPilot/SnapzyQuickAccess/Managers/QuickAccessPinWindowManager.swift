@@ -16,6 +16,19 @@ import SwiftUI
 final class QuickAccessPinWindowManager {
   static let shared = QuickAccessPinWindowManager()
 
+  /// Corner shape every pin is drawn with, read from the capture settings.
+  /// Pins created after a change pick it up at `show()`, and open pins re-shape
+  /// here and now — the alternative is a setting that only works after the user
+  /// unpins and pins again.
+  var cornerStyle: ScreenCapturePinCornerStyle = .rounded {
+    didSet {
+      guard oldValue != cornerStyle else { return }
+      for controller in controllers.values {
+        controller.applyCornerStyle(cornerStyle)
+      }
+    }
+  }
+
   private var controllers: [UUID: QuickAccessPinWindowController] = [:]
   private var lastEscapeAt: Date?
 
@@ -244,7 +257,18 @@ private final class QuickAccessPinWindowController: NSObject {
 
   func show() {
     window.alphaValue = 1.0
+    // The window comes up with whatever the setting says now, not with the
+    // rounded default its own initialiser baked in.
+    applyCornerStyle(QuickAccessPinWindowManager.shared.cornerStyle)
     orderFront()
+  }
+
+  /// Reshapes the pin in place.  Both surfaces need it: the panel's layer and
+  /// native shadow via AppKit, the image clip and hairline via the observable
+  /// state the SwiftUI surface already reads.
+  func applyCornerStyle(_ style: ScreenCapturePinCornerStyle) {
+    state.cornerStyle = style
+    window.applyCornerRadius(style.cornerRadius)
   }
 
   func orderFront() {
