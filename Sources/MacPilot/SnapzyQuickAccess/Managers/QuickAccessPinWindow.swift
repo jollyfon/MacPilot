@@ -22,6 +22,12 @@ final class QuickAccessPinWindow: NSPanel {
   private var globalMouseMonitor: Any?
   private var localKeyMonitor: Any?
   private var globalKeyMonitor: Any?
+  /// Hover state carried between pointer events, because the verdict about
+  /// another application's window covering the pin costs a window-server sweep
+  /// and must not be re-asked on every mouse-move.
+  private var lastPointerWasInsideFrame = false
+  private var hoverIsCovered = false
+  private var lastHoverSweepAt: Date?
 
   init(contentRect: NSRect, state: QuickAccessPinWindowState) {
     pinState = state
@@ -80,7 +86,32 @@ final class QuickAccessPinWindow: NSPanel {
     }
 
     let mouseLocation = NSEvent.mouseLocation
-    let isInside = frame.contains(mouseLocation)
+    let isGeometricallyInside = frame.contains(mouseLocation)
+    let didCrossIntoFrame = isGeometricallyInside && !lastPointerWasInsideFrame
+    lastPointerWasInsideFrame = isGeometricallyInside
+    let now = Date()
+
+    if QuickAccessPinHoverCoverage.sweepIsWorthRunning(
+      pointerIsInsideFrame: isGeometricallyInside,
+      didCrossIntoFrame: didCrossIntoFrame,
+      isKeyWindow: isKeyWindow,
+      hoverIsSuppressed: hoverIsCovered,
+      lastSweepAt: lastHoverSweepAt,
+      now: now
+    ) {
+      lastHoverSweepAt = now
+      hoverIsCovered = !QuickAccessPinHoverCoverage.isPinExposed(
+        at: mouseLocation,
+        pinWindowNumber: CGWindowID(windowNumber),
+        surfaces: QuickAccessPinHoverCoverage.liveSurfaces()
+      )
+    }
+
+    // The hover answers to the window the pointer is actually on.  A dropdown
+    // that hangs over the pin therefore costs the pin nothing: no chrome and,
+    // above all, no key window — taking key status is what used to close the
+    // other application's popup out from under the user.
+    let isInside = isGeometricallyInside && !hoverIsCovered
     pinState.isMouseInside = isInside
 
     guard pinState.isLocked else {
@@ -92,11 +123,12 @@ final class QuickAccessPinWindow: NSPanel {
         if !isKeyWindow {
           makeKey()
         }
-      } else {
-        if isKeyWindow {
-          if let otherWindow = NSApp.windows.first(where: { $0 != self && $0.canBecomeKey && $0.isVisible }) {
-            otherWindow.makeKey()
-          }
+      } else if !isGeometricallyInside, isKeyWindow {
+        // Only a pointer that really left hands key status away.  While the pin
+        // is merely covered, another focus change would be the same mistake in
+        // the other direction, so the pin just waits.
+        if let otherWindow = NSApp.windows.first(where: { $0 != self && $0.canBecomeKey && $0.isVisible }) {
+          otherWindow.makeKey()
         }
       }
       return
@@ -108,7 +140,10 @@ final class QuickAccessPinWindow: NSPanel {
     if pinState.isPointerInLockHotspot != isInsideLockHotspot {
       pinState.isPointerInLockHotspot = isInsideLockHotspot
     }
-    ignoresMouseEvents = isInside && !isInsideLockHotspot
+    // A locked pin never takes key status and never shows hover chrome, so a
+    // cover costs nothing here — and its passthrough has to stay geometric, or
+    // a click through a transparent surface above would stop reaching the pin.
+    ignoresMouseEvents = isGeometricallyInside && !isInsideLockHotspot
   }
 
   private func configure() {

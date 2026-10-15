@@ -241,6 +241,77 @@ struct QuickAccessTests {
         #expect(!QuickAccessPinChromeVisibility.isVisible(mouseInside: false, isDraggingFile: false))
     }
 
+    @Test @MainActor func pinHoverYieldsThePointerToAWindowDrawnOnTopOfIt() {
+        // 贴图的 hover 只认「指针真的落在贴图上」。WPS 之类下拉选项悬在贴图上方时，
+        // 指针虽然在贴图 frame 内，像素却属于那个弹窗；贴图一旦现身、抢下 key window，
+        // 弹窗就被关掉，用户永远点不到被贴图盖住的那一项。
+        let pin = QuickAccessPinHoverCoverage.Surface(
+            windowNumber: 100,
+            frame: CGRect(x: 0, y: 0, width: 200, height: 200)
+        )
+        let popup = QuickAccessPinHoverCoverage.Surface(
+            windowNumber: 200,
+            frame: CGRect(x: 150, y: 150, width: 300, height: 300)
+        )
+        let overlappingPoint = CGPoint(x: 170, y: 170)
+
+        // 扫描表自前向后排序：弹窗在前就是弹窗的像素。
+        #expect(!QuickAccessPinHoverCoverage.isPinExposed(
+            at: overlappingPoint, pinWindowNumber: 100, surfaces: [popup, pin]
+        ))
+        // 贴图在前时一切照旧，hover 该来就来。
+        #expect(QuickAccessPinHoverCoverage.isPinExposed(
+            at: overlappingPoint, pinWindowNumber: 100, surfaces: [pin, popup]
+        ))
+        // 指针只在贴图里：没有别的东西盖住它。
+        #expect(QuickAccessPinHoverCoverage.isPinExposed(
+            at: CGPoint(x: 20, y: 20), pinWindowNumber: 100, surfaces: [popup, pin]
+        ))
+        // 读不到贴图自己（窗口列表短了一截）时不许把贴图打死，仍按几何判断走。
+        #expect(QuickAccessPinHoverCoverage.isPinExposed(
+            at: overlappingPoint, pinWindowNumber: 100, surfaces: []
+        ))
+    }
+
+    @Test @MainActor func pinCoverageSweepRunsOnEdgesNotOnEveryMouseMove() {
+        // 盖没盖住要问 WindowServer，一次一趟全屏幕窗口列表；鼠标每秒上百个事件，
+        // 所以只有「答案会变、而且贴图正要采取行动」的那一刻才值得问。
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+        func shouldSweep(inside: Bool, crossed: Bool, isKey: Bool, isCovered: Bool, last: Date?) -> Bool {
+            QuickAccessPinHoverCoverage.sweepIsWorthRunning(
+                pointerIsInsideFrame: inside,
+                didCrossIntoFrame: crossed,
+                isKeyWindow: isKey,
+                hoverIsSuppressed: isCovered,
+                lastSweepAt: last,
+                now: now
+            )
+        }
+
+        // 刚进 frame：hover 正要亮起来，必须问，哪怕刚刚才问过。
+        #expect(shouldSweep(inside: true, crossed: true, isKey: true, isCovered: false, last: now))
+        // 已经暴露又已经是 key：下一个移动不会改变任何行为，一次都不问。
+        #expect(!shouldSweep(inside: true, crossed: false, isKey: true, isCovered: false, last: now))
+        // 还不是 key：下一个移动就会去抢 key window —— 那正是关掉别人弹窗的动作，必须先问；
+        // 但同一个节流窗口里不重复问。
+        #expect(shouldSweep(inside: true, crossed: false, isKey: false, isCovered: false, last: nil))
+        #expect(!shouldSweep(
+            inside: true, crossed: false, isKey: false, isCovered: false,
+            last: now.addingTimeInterval(-QuickAccessPinHoverCoverage.reprobeInterval / 2)
+        ))
+        #expect(shouldSweep(
+            inside: true, crossed: false, isKey: false, isCovered: false,
+            last: now.addingTimeInterval(-QuickAccessPinHoverCoverage.reprobeInterval)
+        ))
+        // 被盖住时要按间隔继续问：弹窗关掉后，指针不必离开 frame 贴图也能活过来。
+        #expect(shouldSweep(
+            inside: true, crossed: false, isKey: true, isCovered: true,
+            last: now.addingTimeInterval(-QuickAccessPinHoverCoverage.reprobeInterval)
+        ))
+        // 指针不在 frame 内，没有 hover 要决定。
+        #expect(!shouldSweep(inside: false, crossed: false, isKey: false, isCovered: true, last: nil))
+    }
+
     @Test func toastPathDetailKeepsTheFileNameAndAbbreviatesHome() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let inside = URL(fileURLWithPath: home + "/Pictures/MacPilot Screenshots/2026-09-20/MacPilot_a.png")
