@@ -246,11 +246,12 @@ struct BLEMonitoringRestorationTests {
         model.startMonitor(monitored)
         model.handleMonitoredSignalTimeout(for: monitored)
         let resetsBeforeWake = scanner.centralResets
+        let scansBeforeWake = scanner.scanRestarts
         workspaceCenter.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
 
         workspaceCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
 
-        #expect(scanner.scanRestarts == 1, "An earlier recovery must not defer the wake scan")
+        #expect(scanner.scanRestarts == scansBeforeWake + 1, "An earlier recovery must not defer the wake scan")
         #expect(scanner.centralResets == resetsBeforeWake)
     }
 
@@ -315,7 +316,7 @@ struct BLEMonitoringRestorationTests {
     @Test func displayWakeScanRetriesPreserveTheCentralAndStopAfterFreshSignal() async {
         let scanner = RecordingBluetoothScanner()
         let model = BLEUnlockModel(
-            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            userActivityMonitor: BLEUserActivityMonitor(uptime: { 100 }, observesEvents: false),
             bluetoothScanner: scanner
         )
         defer { model.shutdown() }
@@ -399,7 +400,7 @@ struct BLEMonitoringRestorationTests {
         #expect(scanner.centralResets == 0)
     }
 
-    @Test func signalTimeoutRecoveryResetsOnceAndBothScanRetriesPreserveTheNewSession() async {
+    @Test func signalTimeoutRecoveryAndBothScanRetriesPreserveTheExistingSession() async {
         let scanner = RecordingBluetoothScanner()
         let model = BLEUnlockModel(
             userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
@@ -429,7 +430,7 @@ struct BLEMonitoringRestorationTests {
         let phone = UUID()
         model.startMonitor(phone)
         model.handleMonitoredSignalTimeout(for: phone)
-        #expect(scanner.centralResets == 1)
+        #expect(scanner.centralResets == 0)
         var delayIterator = delays.stream.makeAsyncIterator()
         let firstDelay = await delayIterator.next()
         #expect(firstDelay == 3)
@@ -437,7 +438,7 @@ struct BLEMonitoringRestorationTests {
         sleepContinuation = nil
         let secondDelay = await delayIterator.next()
         #expect(secondDelay == 7)
-        #expect(scanner.centralResets == 1, "The three-second retry must preserve the cold connection")
+        #expect(scanner.centralResets == 0, "The three-second retry must preserve the cold connection")
         sleepContinuation?.resume()
         sleepContinuation = nil
         var scanIterator = scans.stream.makeAsyncIterator()
@@ -445,7 +446,7 @@ struct BLEMonitoringRestorationTests {
         let secondScan = await scanIterator.next()
         #expect(firstScan == 1)
         #expect(secondScan == 2)
-        #expect(scanner.centralResets == 1, "The ten-second retry must also preserve the session")
+        #expect(scanner.centralResets == 0, "The ten-second retry must also preserve the session")
     }
 
     @Test func absentSecondaryDoesNotResetAFreshPrimaryInAnyDeviceMode() {

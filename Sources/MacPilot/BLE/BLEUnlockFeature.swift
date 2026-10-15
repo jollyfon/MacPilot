@@ -21,7 +21,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     var diagnosticTaskCount: Int {
         [deviceRefreshTask != nil, wakeRetryTask != nil, systemWakeRecoveryTask != nil,
          monitoringRecoveryTask != nil, unlockAttemptTask != nil].filter { $0 }.count
-            + [scanCleanupTimer, livenessTimer, mediaResumeTask, screenUnlockConfirmationTask, userActivityPolicyTimer]
+            + [scanCleanupTimer, livenessTimer, monitoringDiscoveryTimer, mediaResumeTask, screenUnlockConfirmationTask, userActivityPolicyTimer]
                 .filter { $0?.isRunning == true }.count
     }
     var diagnosticObserverCount: Int { observers.count }
@@ -104,6 +104,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     private var deviceRefreshTask: Task<Void, Never>?
     private var scanCleanupTimer: BackgroundTask?
     private var livenessTimer: BackgroundTask?
+    private var monitoringDiscoveryTimer: BackgroundTask?
+    private var lastMonitoringDiscoveryAt: TimeInterval?
     private var advertisementLiveness = BLEAdvertisementLiveness()
     var monitoredUUID: UUID?
     var secondaryMonitoredUUID: UUID?
@@ -138,6 +140,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     var heldBlankNotificationCenterOverride: NotificationCenter?
     var screenStateNotificationCenterOverride: NotificationCenter?
     var screenLockStateProbe: () -> BLEScreenLockState = { ScreenLockStateReader.current() }
+    /// Test seam for verifying automatic lock decisions without screen effects.
+    var lockScreenOperation: (@MainActor (ScreenControlSource) -> Void)?
     private var manualLock = false
     private var manualLockHasObservedDisplaySleep = false
     private var pendingLockSource: ScreenLockHistorySource?
@@ -242,7 +246,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private var hasMonitoredDevice: Bool { !monitoredUUIDs.isEmpty }
 
-    private func runtime(for uuid: UUID) -> BLEMonitoredDeviceRuntime? {
+    func runtime(for uuid: UUID) -> BLEMonitoredDeviceRuntime? {
         monitoredRuntimes[uuid]
     }
 
@@ -333,6 +337,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         refreshPublishedMonitoringState()
         advertisementLiveness.noteActivity()
         startLivenessTimer()
+        startMonitoringDiscoveryTimer()
         scanForPeripherals()
         logSettings("monitoring started")
     }
@@ -475,7 +480,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
     func setUnlockRSSI(_ value: Int) { log("setUnlockRSSI from=\(settings.unlockRSSI) to=\(value)"); settings.unlockRSSI = value; notifyChange() }
     func setProximityTimeout(_ value: Int) { log("setProximityTimeout from=\(settings.proximityTimeout) to=\(value)"); settings.proximityTimeout = value; notifyChange() }
-    func setSignalTimeout(_ value: Int) { log("setSignalTimeout from=\(settings.signalTimeout) to=\(value)"); settings.signalTimeout = value; notifyChange() }
+    func setSignalTimeout(_ value: Int) {
+        log("setSignalTimeout from=\(settings.signalTimeout) to=\(value)")
+        settings.signalTimeout = value
+        if monitoringDiscoveryTimer != nil {
+            monitoringDiscoveryTimer?.stop()
+            monitoringDiscoveryTimer = nil
+            startMonitoringDiscoveryTimer()
+        }
+        notifyChange()
+    }
     func setThresholdRSSI(_ value: Int) { log("setThresholdRSSI from=\(settings.thresholdRSSI) to=\(value)"); settings.thresholdRSSI = value; notifyChange() }
     func setWakeOnProximity(_ value: Bool) {
         log("setWakeOnProximity from=\(settings.wakeOnProximity) to=\(value)")
@@ -651,6 +665,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         activeMode = false
         recoveringFromSystemSleep = false
         stopLivenessTimer()
+        monitoringDiscoveryTimer?.stop()
+        monitoringDiscoveryTimer = nil
+        lastMonitoringDiscoveryAt = nil
         advertisementStreamStalled = false
         otherInstanceCount = 0
         // Drop the CoreBluetooth central too: holding it keeps a Bluetooth XPC
@@ -803,12 +820,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         startConfiguredMonitoring()
     }
 
-    private func resetSignalTimer(for uuid: UUID, minimumDelay: TimeInterval = 0) {
+    private func resetSignalTimer(for uuid: UUID, minimumDelay: TimeInterval = 0, delayOverride: TimeInterval? = nil) {
         guard let runtime = runtime(for: uuid) else { return }
         runtime.signalTimer?.stop()
         runtime.signalTimerGeneration &+= 1
         let generation = runtime.signalTimerGeneration
-        let delay = max(TimeInterval(settings.signalTimeout), minimumDelay)
+        let delay = delayOverride ?? max(TimeInterval(settings.signalTimeout), minimumDelay)
         runtime.signalTimeoutDeadline = userActivityMonitor.now + delay
         runtime.signalTimer = signalTimeoutScheduler(delay) { [weak self, weak runtime] in
             guard let self, let runtime else { return }
@@ -823,12 +840,29 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     func handleMonitoredSignalTimeout(for uuid: UUID) {
         guard let runtime = runtime(for: uuid) else { return }
         log("signal timeout fired uuid=\(uuid.uuidString) timeout=\(settings.signalTimeout) devicePresence=\(runtime.presence)")
+        // Invalidate RSSI immediately, but give discovery one bounded chance
+        // before locking. The old code locked first and cancelled a reconnect
+        // just before its own 60-second connection deadline could finish.
+        if runtime.presence, !runtime.verifyingSignalLoss,
+           settings.lockRSSI != Self.lockDisabled, !isScreenLocked(), !activeConnectionsPaused, !systemSleep {
+            runtime.verifyingSignalLoss = true
+            runtime.lastRSSI = nil
+            runtime.latestRSSIs.removeAll(keepingCapacity: true)
+            runtime.cancelProximityTimer()
+            refreshPublishedMonitoringState()
+            let delay = BLEScanPolicy.rediscoveryInterval(signalTimeout: settings.signalTimeout)
+            resetSignalTimer(for: uuid, minimumDelay: 0, delayOverride: delay)
+            log("signal loss verification started uuid=\(uuid.uuidString) seconds=\(delay) preservingConnections=true")
+            refreshMonitoringDiscovery(reason: "signalLossVerification")
+            return
+        }
         // Normal monitoring's full no-signal window is also a departure. A
         // deliberate pause/reset must never manufacture that evidence.
         let confirmedDeparture = manualLock && runtime.signalObservationIsContinuous
             && runtime.lastRSSI != nil && !activeConnectionsPaused && !systemSleep
             && runtime.signalTimeoutDeadline.map { userActivityMonitor.now >= $0 } == true
         runtime.signalObservationIsContinuous = false
+        runtime.verifyingSignalLoss = false
         runtime.signalTimeoutDeadline = nil
         runtime.signalTimer = nil
         runtime.lastRSSI = nil
@@ -855,6 +889,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     func updateMonitoredPeripheral(_ rssi: Int, for uuid: UUID) {
         guard let runtime = runtime(for: uuid) else { return }
+        runtime.verifyingSignalLoss = false
         noteAdvertisementActivity()
         let unlockThreshold = settings.unlockRSSI == Self.unlockDisabled ? settings.lockRSSI : settings.unlockRSSI
         if rssi >= unlockThreshold && !runtime.presence {
@@ -894,8 +929,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 let sampleAge = runtime.lastRSSISampledAt.map { self.userActivityMonitor.now - $0 }
                 let sampleIsFresh = sampleAge.map { $0 >= 0 && $0 < TimeInterval(self.settings.signalTimeout) } == true
                 let confirmedDeparture = sampleIsFresh && runtime.lastRSSI.map { $0 < currentThreshold } == true
-                runtime.presence = false
                 runtime.proximityTimer = nil
+                guard confirmedDeparture else {
+                    self.log("away timer ignored uuid=\(uuid.uuidString) reason=noFreshDistantSignal")
+                    return
+                }
+                runtime.presence = false
                 self.recomputePresence(reason: "away", confirmedDeparture: confirmedDeparture)
             }
         }
@@ -1003,11 +1042,78 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             currentRuntime.rssiRequestTimeoutTimer = nil
             guard currentRuntime.rssiReadGate.hasTimedOut(at: Date()) else { return }
             self.log("RSSI request timed out uuid=\(currentRuntime.uuid.uuidString) timeout=\(BLERequestGate.requestTimeout)")
+            currentRuntime.rssiReadGate.reset()
             self.startMonitoringRecovery(reason: "rssiRequestTimeout", restartImmediately: true)
         }
     }
 
     // MARK: CBCentralManagerDelegate
+
+    /// Shared by the real discovery callback and isolated radio regressions.
+    func receiveMonitoredAdvertisement(_ rssi: Int, for uuid: UUID) {
+        guard runtime(for: uuid) != nil else { return }
+        updateMonitoredPeripheral(rssi, for: uuid)
+        if !settings.passiveMode { connectMonitoredPeripheral(for: uuid) }
+    }
+
+    private func startMonitoringDiscoveryTimer() {
+        guard monitoringDiscoveryTimer == nil else { return }
+        let interval = BLEScanPolicy.rediscoveryInterval(signalTimeout: settings.signalTimeout)
+        monitoringDiscoveryTimer = BackgroundTask.repeating(every: interval) { [weak self] in
+            self?.evaluateMonitoringDiscovery()
+        }
+    }
+
+    func evaluateMonitoringDiscovery() {
+        guard monitoringDiscoveryTimer != nil, settings.isEnabled, hasMonitoredDevice, !systemSleep else { return }
+        let now = userActivityMonitor.now
+        let interval = BLEScanPolicy.rediscoveryInterval(signalTimeout: settings.signalTimeout)
+        // Each logical device needs its own working observation path. A fresh
+        // phone must not suppress rediscovery of the missing watch in OR mode;
+        // an unknown alias must not cause scans if that same phone is healthy.
+        let observed = logicalDeviceStates { runtime in
+            guard runtime.lastRSSI != nil, let sampled = runtime.lastRSSISampledAt else { return false }
+            let age = now - sampled
+            return age >= 0 && age < interval
+        }
+        guard observed.contains(false) else { return }
+        refreshMonitoringDiscovery(reason: "missingDeviceSignal")
+    }
+
+    private func refreshMonitoringDiscovery(reason: String) {
+        guard settings.isEnabled, hasMonitoredDevice, !systemSleep else { return }
+        let now = userActivityMonitor.now
+        let interval = BLEScanPolicy.rediscoveryInterval(signalTimeout: settings.signalTimeout)
+        if let last = lastMonitoringDiscoveryAt, now >= last, now - last < interval { return }
+        lastMonitoringDiscoveryAt = now
+        let scanning = bluetoothScanner.restartIfPoweredOn()
+        log("monitoring discovery \(scanning ? "restarted" : "deferred") reason=\(reason) preservingConnections=true devices=[\(monitoringSignalSnapshot(at: now))]")
+        if let central = centralMgr, central.state == .poweredOn {
+            restoreKnownMonitoredPeripherals(using: central)
+        }
+    }
+
+    private func monitoringSignalSnapshot(at now: TimeInterval) -> String {
+        logicalDeviceUUIDs.map { logical in
+            let aliases = settings.identityRegistry.uuids(for: logical).map { uuid in
+                guard let runtime = runtime(for: uuid) else { return "\(uuid.uuidString):unobserved" }
+                let age = runtime.lastRSSISampledAt.map { String(format: "%.1f", now - $0) } ?? "none"
+                let state = runtime.peripheral.map { String($0.state.rawValue) } ?? "none"
+                return "\(uuid.uuidString):rssi=\(runtime.lastRSSI.map(String.init) ?? "none"),age=\(age),link=\(state)"
+            }.joined(separator: ";")
+            return "\(logical.uuidString)={\(aliases)}"
+        }.joined(separator: " ")
+    }
+
+    private var allLogicalDevicesHaveRSSIPolling: Bool {
+        let links = logicalDeviceStates { runtime in
+            !BLEScanPolicy.needsAdvertisements(
+                connectionState: runtime.peripheral?.state,
+                hasRSSIPoller: runtime.activeModeTimer != nil
+            )
+        }
+        return !links.isEmpty && links.allSatisfy { $0 }
+    }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         guard central === centralMgr else { return }
@@ -1063,10 +1169,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             if firstDiscovery {
                 log("monitored peripheral discovered uuid=\(uuid.uuidString) rssi=\(rssi) passive=\(settings.passiveMode)")
             }
-            if runtime.activeModeTimer == nil {
-                updateMonitoredPeripheral(rssi, for: uuid)
-                if !settings.passiveMode { connectMonitoredPeripheral(for: uuid) }
-            }
+            // An active-mode timer can outlive the connection it polls.
+            // A real advertisement remains evidence even while reconnecting.
+            receiveMonitoredAdvertisement(rssi, for: uuid)
         }
 
         guard isScanning else { return }
@@ -1153,6 +1258,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             runtime.rssiReadGate.reset()
             runtime.activeMode = runtime.activeModeTimer != nil
             refreshPublishedMonitoringState()
+            refreshMonitoringDiscovery(reason: "peripheralDisconnected")
         }
     }
 
@@ -1172,10 +1278,6 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         updateMonitoredPeripheral(rssi, for: runtime.uuid)
 
         if runtime.activeModeTimer == nil && !settings.passiveMode && !activeConnectionsPaused {
-            let anotherDeviceNeedsScan = monitoredUUIDs.contains {
-                monitoredRuntimes[$0]?.peripheral == nil
-            }
-            if !isScanning && !anotherDeviceNeedsScan { centralMgr?.stopScan() }
             let runtimeUUID = runtime.uuid
             runtime.activeModeTimer = BackgroundTask.repeating(every: 2) { [weak self] in
                 guard let self, let runtime = self.runtime(for: runtimeUUID),
@@ -1187,6 +1289,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 }
             }
             runtime.activeMode = true
+            // A cached CBPeripheral is not a working observation channel.
+            // Keep discovering a watch that is disconnected or still waiting
+            // for its first successful RSSI, even when the phone is healthy.
+            if !isScanning && allLogicalDevicesHaveRSSIPolling { centralMgr?.stopScan() }
             refreshPublishedMonitoringState()
         }
     }
@@ -1244,6 +1350,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     private func lockOrSaveScreen(source: ScreenControlSource) {
+        if let lockScreenOperation {
+            lockScreenOperation(source)
+            return
+        }
         screenControl.markPendingLock(source: source)
         log("locking screen useScreensaver=\(settings.useScreensaver) turnOffScreen=\(settings.turnOffScreen)")
         if settings.useScreensaver {
@@ -1834,12 +1944,15 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private func restartMonitoringAfterRecovery(reason: String, resetCentral: Bool) {
         guard settings.isEnabled, hasMonitoredDevice, !systemSleep else { return }
-        if reason == "displayWake" || !resetCentral || activeConnectionsPaused {
+        if reason == "displayWake" || reason == "signalTimeout"
+            || reason == "rssiRequestTimeout" || reason == "rssiReadFailed"
+            || !resetCentral || activeConnectionsPaused {
             // Discover immediately using the existing session. Recreating the
             // central here (and again at 3/10 seconds) cancels the connections
             // that the wake transition has just started restoring.
             ensureCentralManager()
             let scanning = bluetoothScanner.restartIfPoweredOn()
+            lastMonitoringDiscoveryAt = userActivityMonitor.now
             let event = reason == "displayWake" ? "display wake scan" : "monitoring recovery scan"
             log("\(event) \(scanning ? "restarted" : "deferred") preservingConnections=true reason=\(reason)")
             if let central = centralMgr, central.state == .poweredOn {

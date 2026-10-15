@@ -18,6 +18,7 @@ final class BLEMonitoredDeviceRuntime {
     var signalTimerGeneration: UInt64 = 0
     var signalTimeoutDeadline: TimeInterval?
     var signalObservationIsContinuous = false
+    var verifyingSignalLoss = false
     var activeModeTimer: BackgroundTask?
     var connectionTimer: BackgroundTask?
     var rssiRequestTimeoutTimer: BackgroundTask?
@@ -39,6 +40,7 @@ final class BLEMonitoredDeviceRuntime {
         signalTimerGeneration &+= 1
         signalTimeoutDeadline = nil
         signalObservationIsContinuous = false
+        verifyingSignalLoss = false
         activeModeTimer?.stop()
         activeModeTimer = nil
         connectionTimer?.stop()

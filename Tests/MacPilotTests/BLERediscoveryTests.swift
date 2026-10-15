@@ -1,0 +1,241 @@
+import CoreBluetooth
+import Foundation
+import Testing
+@testable import MacPilot
+
+@MainActor
+struct BLERediscoveryTests {
+    @Test func aKnownButDisconnectedWatchStillNeedsAdvertisements() {
+        #expect(!BLEScanPolicy.needsAdvertisements(connectionState: .connected, hasRSSIPoller: true))
+        for state in [CBPeripheralState.disconnected, .connecting, .disconnecting] {
+            #expect(BLEScanPolicy.needsAdvertisements(connectionState: state, hasRSSIPoller: true))
+        }
+        #expect(BLEScanPolicy.needsAdvertisements(connectionState: .connected, hasRSSIPoller: false))
+        #expect(BLEScanPolicy.needsAdvertisements(connectionState: nil, hasRSSIPoller: false))
+    }
+
+    @Test func advertisementsRefreshPresenceEvenWhenAnActivePollerSurvivedDisconnection() throws {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        let runtime = try #require(h.model.runtime(for: h.phone))
+        runtime.activeModeTimer = BackgroundTask.repeating(every: 3_600) {}
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        h.now += 30
+        h.model.receiveMonitoredAdvertisement(-45, for: h.phone)
+        #expect(runtime.lastRSSISampledAt == h.now)
+        #expect(h.model.presence)
+        #expect(h.locks.isEmpty)
+    }
+
+    @Test(arguments: [true, false])
+    func eachLogicalDeviceIsRediscoveredEvenIfTheOtherIsFresh(phoneIsFresh: Bool) {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        h.model.receiveMonitoredAdvertisement(-50, for: phoneIsFresh ? h.phone : h.watch)
+        h.model.evaluateMonitoringDiscovery()
+        #expect(h.scanner.restarts == 1)
+        h.model.evaluateMonitoringDiscovery()
+        #expect(h.scanner.restarts == 1, "Missing devices cannot cause an unbounded scan restart loop")
+        h.now += 10
+        h.model.receiveMonitoredAdvertisement(-50, for: phoneIsFresh ? h.phone : h.watch)
+        h.model.evaluateMonitoringDiscovery()
+        #expect(h.scanner.restarts == 2)
+        #expect(h.scanner.centralResets == 0)
+    }
+
+    @Test func healthyDevicesNeedNoDiscoveryAndAnUnknownAliasDoesNotCountAsAMissingDevice() {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        h.model.bindRemoteIdentity(primaryUUID: h.phone, clientID: "phone", keyFingerprint: "test")
+        h.model.learnAuthenticatedBLEIdentity(clientID: "phone", keyFingerprint: "test", peripheralUUID: UUID())
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        h.model.receiveMonitoredAdvertisement(-50, for: h.watch)
+        h.model.evaluateMonitoringDiscovery()
+        #expect(h.scanner.restarts == 0)
+    }
+
+    @Test func twoSimultaneousTimeoutsCannotLockBeforeTheRediscoveryResultArrives() throws {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        h.model.receiveMonitoredAdvertisement(-55, for: h.watch)
+        h.now += 60
+        h.model.handleMonitoredSignalTimeout(for: h.phone)
+        h.model.handleMonitoredSignalTimeout(for: h.watch)
+        #expect(h.locks.isEmpty)
+        #expect(h.model.lastRSSI == nil, "Verification may retain a lock decision, never fresh unlock evidence")
+        #expect(!h.model.isUnlockAttemptScheduled)
+        #expect(h.scanner.restarts == 1)
+        #expect(h.scanner.centralResets == 0)
+
+        let phoneVerification = try #require(h.signalActions.dropLast().last)
+        let watchVerification = try #require(h.signalActions.last)
+        #expect(phoneVerification.delay == 10)
+        #expect(watchVerification.delay == 10)
+        h.now += 5
+        h.model.receiveMonitoredAdvertisement(-52, for: h.watch)
+        h.now += 5
+        phoneVerification.action()
+        watchVerification.action() // stale callback must not erase the new watch signal
+        #expect(h.model.presence)
+        #expect(h.model.lastRSSI == -52)
+        #expect(h.locks.isEmpty)
+        #expect(h.scanner.centralResets == 0)
+    }
+
+    @Test func genuinelySilentDevicesStillLockAfterOneBoundedVerification() throws {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        h.model.receiveMonitoredAdvertisement(-50, for: h.watch)
+        h.now += 60
+        h.model.handleMonitoredSignalTimeout(for: h.phone)
+        h.model.handleMonitoredSignalTimeout(for: h.watch)
+        let confirmations = Array(h.signalActions.suffix(2))
+        #expect(h.locks.isEmpty)
+        h.now += 10
+        for confirmation in confirmations { confirmation.action() }
+        #expect(!h.model.presence)
+        #expect(h.model.lastRSSI == nil)
+        #expect(h.locks == [.bleAutomatic])
+        #expect(h.scanner.centralResets == 0)
+    }
+
+    @Test func repeatedRediscoveryDoesNotExtendTheConfiguredSignalDeadline() throws {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        h.model.receiveMonitoredAdvertisement(-50, for: h.watch)
+        let deadline = try #require(h.model.runtime(for: h.phone)?.signalTimeoutDeadline)
+        for _ in 0..<5 {
+            h.now += 10
+            h.model.evaluateMonitoringDiscovery()
+            #expect(h.model.runtime(for: h.phone)?.signalTimeoutDeadline == deadline)
+        }
+        #expect(h.scanner.restarts == 5)
+        #expect(h.locks.isEmpty)
+    }
+
+    @Test func aFreshWatchPreventsLockWhenThePhoneReallyStopsResponding() throws {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        h.model.receiveMonitoredAdvertisement(-50, for: h.watch)
+        h.now += 60
+        h.model.handleMonitoredSignalTimeout(for: h.phone)
+        let confirmation = try #require(h.signalActions.last)
+        h.model.receiveMonitoredAdvertisement(-45, for: h.watch)
+        h.now += 10
+        confirmation.action()
+        #expect(h.model.presence)
+        #expect(h.locks.isEmpty)
+    }
+
+    @Test func allDeviceModeStillRequiresBothDevicesAfterVerification() throws {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        h.model.settings.deviceRelation = .all
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        h.model.receiveMonitoredAdvertisement(-50, for: h.watch)
+        h.now += 60
+        h.model.handleMonitoredSignalTimeout(for: h.phone)
+        let confirmation = try #require(h.signalActions.last)
+        h.model.receiveMonitoredAdvertisement(-45, for: h.watch)
+        h.now += 10
+        confirmation.action()
+        #expect(!h.model.presence)
+        #expect(h.locks == [.bleAutomatic])
+    }
+
+    @Test func weakSignalDepartureKeepsItsOriginalDelayAndDeviceRelationship() {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        h.model.receiveMonitoredAdvertisement(-50, for: h.watch)
+        for uuid in [h.phone, h.watch] {
+            for _ in 0..<5 { h.model.receiveMonitoredAdvertisement(-95, for: uuid) }
+            #expect(h.proximityActions.last?.delay == 5)
+            h.proximityActions.last?.action()
+            if uuid == h.phone { #expect(h.locks.isEmpty) }
+        }
+        #expect(h.locks == [.bleAutomatic])
+    }
+
+    @Test func overdueWeakSignalCallbacksCannotLockUsingExpiredSamples() {
+        let h = Harness()
+        defer { h.model.shutdown() }
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        h.model.receiveMonitoredAdvertisement(-50, for: h.watch)
+        for uuid in [h.phone, h.watch] {
+            for _ in 0..<5 { h.model.receiveMonitoredAdvertisement(-95, for: uuid) }
+        }
+        h.now += 61
+        for callback in h.proximityActions { callback.action() }
+        #expect(h.locks.isEmpty, "An overdue weak-signal timer must use signal-loss verification instead")
+        #expect(h.model.presence)
+    }
+
+    @Test func shutdownStopsTheDiscoveryTimerAndDoesNotRestartTheRadio() {
+        let h = Harness()
+        h.model.shutdown()
+        h.now += 100
+        h.model.evaluateMonitoringDiscovery()
+        #expect(h.scanner.restarts == 0)
+        #expect(h.model.diagnosticTaskCount == 0)
+    }
+
+    @MainActor
+    private final class Harness {
+        var now: TimeInterval = 100
+        let phone = UUID()
+        let watch = UUID()
+        let scanner = Scanner()
+        var model: BLEUnlockModel!
+        var locks: [ScreenControlSource] = []
+        var signalActions: [(delay: TimeInterval, action: @MainActor () -> Void)] = []
+        var proximityActions: [(delay: TimeInterval, action: @MainActor () -> Void)] = []
+
+        init() {
+            model = BLEUnlockModel(
+                userActivityMonitor: BLEUserActivityMonitor(uptime: { [weak self] in self?.now ?? 0 }, observesEvents: false),
+                bluetoothScanner: scanner,
+                eventScriptRunner: { _ in }
+            )
+            model.displayUnavailableProbe = { false }
+            model.screenLockStateProbe = { .unlocked }
+            model.lockScreenOperation = { [weak self] in self?.locks.append($0) }
+            model.settings.isEnabled = true
+            model.settings.deviceRelation = .any
+            model.settings.signalTimeout = 60
+            model.settings.proximityTimeout = 5
+            model.settings.lockRSSI = -80
+            model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+            model.settings.pauseNowPlaying = false
+            model.signalTimeoutScheduler = { [weak self] delay, action in
+                self?.signalActions.append((delay, action))
+                return BackgroundTask.once(after: 3_600) {}
+            }
+            model.proximityTimeoutScheduler = { [weak self] delay, action in
+                self?.proximityActions.append((delay, action))
+                return BackgroundTask.once(after: 3_600) {}
+            }
+            model.secondaryMonitoredUUID = watch
+            model.startMonitor(phone)
+        }
+    }
+
+    @MainActor
+    private final class Scanner: BluetoothScanning {
+        var central: CBCentralManager? {
+            get { nil }
+            set { centralResets += 1 }
+        }
+        var centralResets = 0
+        var restarts = 0
+        func createIfNeeded(delegate: CBCentralManagerDelegate) {}
+        func startIfPoweredOn() -> Bool { true }
+        func restartIfPoweredOn() -> Bool { restarts += 1; return true }
+        func stop() {}
+        func release() {}
+    }
+}

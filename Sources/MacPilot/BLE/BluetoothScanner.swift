@@ -7,6 +7,16 @@ import Foundation
 enum BLEScanPolicy {
     static let allowsDuplicateAdvertisements = false
 
+    /// A deduplicated scan is discovery, not a continuous presence stream.
+    /// Refresh it at a bounded rate when a logical device has no recent RSSI.
+    static func rediscoveryInterval(signalTimeout: Int) -> TimeInterval {
+        min(10, max(1, TimeInterval(signalTimeout) / 3))
+    }
+
+    static func needsAdvertisements(connectionState: CBPeripheralState?, hasRSSIPoller: Bool) -> Bool {
+        connectionState != .connected || !hasRSSIPoller
+    }
+
     static var scanOptions: [String: Any]? {
         allowsDuplicateAdvertisements
             ? [CBCentralManagerScanOptionAllowDuplicatesKey: true]
