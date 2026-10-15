@@ -186,8 +186,19 @@ public enum InstalledAppResolver {
     }
 
     private static func displayName(of bundle: Bundle, fallback: String) -> String {
-        (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
-            ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
+        // 本地化表可以把显示名覆盖成空串（三局通的 `en.lproj/InfoPlist.strings` 就把
+        // `CFBundleDisplayName` 与 `CFBundleName` 都写成 ""，开发区域又是 en），而
+        // `Bundle` 对这类可本地化的键读的正是本地化表。用 `??` 会停在空值上，
+        // 索引里就留下一条没有名字的应用。
+        nonEmpty(bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? nonEmpty(bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
             ?? fallback
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return value
     }
 }

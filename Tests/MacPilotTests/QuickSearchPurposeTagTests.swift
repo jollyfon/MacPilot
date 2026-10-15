@@ -97,18 +97,34 @@ struct QuickSearchPurposeTagTests {
         #expect(QuickSearchAppTagger.tags(
             for: QuickSearchAppMetadata(categoryType: "public.app-category.photography")
         ).contains("图片"))
-        #expect(QuickSearchAppTagger.tags(
-            for: QuickSearchAppMetadata(categoryType: "public.app-category.developer-tools")
-        ).contains("代码"))
 
-        // utilities 与 productivity 被厂商当「其余一切」用（本机各占 38 与 27 个），
-        // 说出去等于没说，所以不给标签。
+        // utilities、productivity 被厂商当「其余一切」用（本机各占 38 与 27 个），
+        // developer-tools 是打包工具链的默认值（本机 52 个应用声称属于它，其中有
+        // 有道云笔记、字由、QQ、天翼云盘）——三个都不给标签。
         #expect(QuickSearchAppTagger.tags(
             for: QuickSearchAppMetadata(categoryType: "public.app-category.utilities")
         ).isEmpty)
         #expect(QuickSearchAppTagger.tags(
             for: QuickSearchAppMetadata(categoryType: "public.app-category.productivity")
         ).isEmpty)
+        #expect(QuickSearchAppTagger.tags(
+            for: QuickSearchAppMetadata(categoryType: "public.app-category.developer-tools")
+        ).isEmpty)
+
+        // 真正的代码工具靠它声明的源码/脚本 UTI 认定，而不是靠分类。
+        let ide = QuickSearchAppTagger.tags(for: QuickSearchAppMetadata(
+            categoryType: "public.app-category.developer-tools",
+            contentTypes: ["public.source-code", "com.apple.xcode.project", "public.plain-text"]
+        ))
+        #expect(ide.contains("开发"))
+        #expect(ide.contains("代码"))
+
+        // 只声明能打开纯文本的是文本编辑器，不是「开发工具」。
+        let editor = QuickSearchAppTagger.tags(
+            for: QuickSearchAppMetadata(contentTypes: ["public.plain-text", "public.json"])
+        )
+        #expect(editor.contains("文本"))
+        #expect(!editor.contains("开发"))
     }
 
     @Test func boilerplateDeclarationsAreNotPurposes() {

@@ -2206,3 +2206,19 @@ Mac 现在由 `RemoteBonjourPublisher` 独立注册实际监听端口，保留 P
 匹配范围是新的设置项 `quickSearch.matchScope`（`nameOnly` / `nameAndPurpose`，默认带用途）：纯追加键、`decodeIfPresent`、契约测试补了新键。这里有一个不变量级别的坑——**认不出来的枚举值不能抛**：`QuickSearchMatchScope` 合成解码遇到 `"telepathy"`（用户装过更新的一版再降回来）会抛，而一抛就让 `StoredConfiguration.section(...)` 把整节退回默认，收藏、面板位置、快捷键一起没，正是 v1.1.482-beta.5 事故的形状。改成 `try?` 折叠：键不存在与值不认识都落回默认，其余键原样保留，并用测试锁住「未知值 + favorites 仍在」。另外两条是观感阈值：标签命中永远排在所有名称命中之后（新分级 `.tag` 夹在拼音与模糊之间），行上把命中的词放到原本表示类别的那枚标签上，否则「Motrix 为什么会出现在『下载』下面」没有解释；拉丁输入还要满 3 个字符才允许「标签以输入开头」，不然 `co`/`of`/`ch` 会前缀命中 code/office/chat，把三大类软件全端上来。标签自己的拼音不参与匹配。成本：扫描多读一遍 `Contents/Info.plist`（不走 `Bundle` 缓存，理由与 `freshVersion` 相同），本机 291 个应用整段约 0.22 秒，仍在后台线程、仍只在面板打开且过期时重建。
 
 验证：`swift test --filter "QuickSearch|ConfigurationSchemaContractTests|ConfigStoreTests"` 190 条 / 27 套件通过，其中新写 23 条（标签推导 9 条含临时 bundle 真实解析、匹配边界 6 条、名称变体 3 条、设置与降级 3 条、模型侧 2 条）；全新 Release 带 `-Xswiftc -warnings-as-errors` 通过——它抓出来的正是那条 `??` 左侧非可选的诊断，debug 增量构建只当警告。⚠️ 43% 的覆盖率在真机上够不够用、「图片/下载」的实际命中列表合不合意、以及标签词出现在类别位置上会不会被读成「这是应用类型」，都要等 `v1.2.2-beta.8` 装上去由用户眼睛判。
+
+## 八十、快速搜索的用途标签：beta.8 上线后先自己把命中率跑了一遍，「开发」52 个里一大半是打包模板的默认值（2026-10-15）
+
+beta.8 推出去之后没有直接等用户眼睛验收，而是写了一条临时测试，让**线上那套 tagger**去扫真机（`/Applications` + 用户级 + 系统目录，308 个已索引），把每个用途词的实际命中列表打出来，看完就把文件删掉。理由很简单：上一节的数字来自我另写的度量脚本，脚本会和数据集一起骗人，只有跑同一段生产代码的结果才算数。
+
+先对上账：308 个里 129 个有标签（41.9%），和先前估的 43% 差一个目录集合，「约四成」不算吹。真正的问题是命中列表里有一条离谱的——**输「开发」出来 52 个应用，里面是天翼云盘、有道云笔记、字由、QQ、Clash Verge、aTrust、OpenVPN Connect、ChatGPT**。逐个读它们的 `Info.plist`，`LSApplicationCategoryType` 全写着一模一样的 `public.app-category.developer-tools`：这是打包工具链的默认值，不是厂商对用途的表态。而反过来看真写代码的：Xcode 声明了几百条 UTI（含 `public.source-code`、`com.apple.xcode.project`），Ghostty 声明 `public.unix-executable`，但 Code、Cursor、IntelliJ IDEA、Proxyman 除了这条脏分类**什么都没说**。也就是说，离线证据里不存在能区分「它真是 IDE」和「它的模板默认是 IDE」的信号——那就不能假装存在。
+
+于是规则改成：**分类不再产出「开发」，代码工具改由文档类型里声明的源码/脚本 UTI 认定**（新增一族 `public.source-code`/`public.script`/`public.c-*`/`com.apple.xcode*`/`public.unix-executable`/`public.git*`… → 开发、代码、code）。顺带把原来那一族里混着的 `public.plain-text` 拆开：只声明能打开纯文本的是文本编辑器，不该被叫成「代码」。改完命中数是「开发」52 → 4（Xcode×2、Ghostty、Terminal），QQ 回到「聊天」（那是 `tencent`/`mqqapi` 方案给的，是真的），天翼云盘、字由、有道云笔记变成**没有标签**——这比给错标签好，用户搜不到时不会以为是我们瞎猜的。
+
+代价写在明面上：整体覆盖率 41.9% → **27.9%**（86/308）。这是一次刻意的精度换召回，其余词几乎没动（图片 21、视频 15、PDF 14、办公 13、浏览器 12、远程 7、聊天 6、下载 3、数据库 1）。设置页那句「本机约四成应用给得出来」跟着改成三成，两种语言一起改，并把「模板默认写开发工具」也写进说明——用户看到的应用列表就是我们看到的。
+
+「浏览器」12 个里混着 Downie 4、ChatGPT、cmux（它们确实注册了 http/https）我**留着没动**。试过判据：`LSHandlerRank` 本来以为能区分「浏览器=Owner，顺手接链接=Alternate」，实测 Chrome、Firefox、Edge 都没写这个键，只有第三方包随手写 Default/Alternate，判据不成立；再往下就是读 `CFBundleURLName` 的英文句子挑 "Web site URL"，那已经是猜了，违反「只读声明、不猜语义」。而这条标签字面上没错（它们真能接网页链接），名称命中永远排在标签命中之前，同级又按打开次数排，所以天天开的浏览器自己会到第一行。
+
+度量时还撞出另一个 bug：命中列表开头出现过一个**空白名字**的行。查 `/Applications/三局通.app`：主 `Info.plist` 里 `CFBundleDisplayName` 明明是「三局通」，但 `en.lproj/InfoPlist.strings` 把 `CFBundleDisplayName` 和 `CFBundleName` **双双覆盖成空串**，而开发区域又是 `en`——`Bundle.object(forInfoDictionaryKey:)` 读的是这张可本地化的表，于是拿到 `""`，`displayName(of:fallback:)` 里那条 `??` 链停在空值上，索引里就留下一条没名字的应用（Dock Groups 的分组行同样会显示空白）。修在共享的 `InstalledAppResolver` 里：空串当缺失，继续往下退到包目录名。测试先断言 `Bundle` 确实返回空串再断言解析结果，否则哪天系统行为变了这条测试会静默变成永真。
+
+验证：`swift test --filter "QuickSearch|ConfigurationSchemaContractTests|ConfigStoreTests|DockGroupsCoreTests"` 通过；全新 Release 带 `-Xswiftc -warnings-as-errors` 通过。⚠️ 剩下的仍要人眼判：三成覆盖率下「图片/下载/办公」这些词的实际列表合不合意、「开发」只剩 4 个是不是太紧（如果用户想按类型捞 IDE，那是名称搜索的事），以及标签词出现在类别位置上会不会被读成「这是应用类型」。

@@ -33,9 +33,11 @@ enum QuickSearchAppTagger {
     /// 单个应用最多带几个标签：再多就只是把命中行塞满噪声。
     static let maximumTagsPerApp = 6
 
-    /// 分类 → 用途词。`public.app-category.utilities` 与 `productivity` 被厂商当作
-    /// 「其余一切」的垃圾桶用（本机 202 个应用里各占 38 与 27 个），说了等于没说，
-    /// 所以刻意不出现在这里。
+    /// 分类 → 用途词。三个分类被厂商当作「其余一切」的垃圾桶用，说了等于没说，
+    /// 所以刻意不出现在这里：`utilities` 与 `productivity`（本机 202 个应用里各占
+    /// 38 与 27 个），以及 `developer-tools` —— 那是打包工具链的默认值，本机 52 个
+    /// 应用声称属于它，其中有道云笔记、字由、QQ、天翼云盘、Clash Verge 全在里面。
+    /// 真正的代码工具改由文档类型那一族认定（见 `contentTypeRules`）。
     private static let categoryTags: [String: [String]] = [
         "public.app-category.photography": ["图片", "照片", "photo", "image"],
         "public.app-category.graphics-design": ["设计", "作图", "design"],
@@ -44,7 +46,6 @@ enum QuickSearchAppTagger {
         "public.app-category.entertainment": ["影音", "娱乐"],
         "public.app-category.games": ["游戏", "game"],
         "public.app-category.social-networking": ["聊天", "社交", "chat", "social"],
-        "public.app-category.developer-tools": ["开发", "代码", "编程", "code", "develop"],
         "public.app-category.business": ["办公", "企业", "office"],
         "public.app-category.reference": ["资料", "文档", "reference"],
         "public.app-category.education": ["学习", "教育", "study"],
@@ -94,8 +95,12 @@ enum QuickSearchAppTagger {
           "com.apple.pages", "com.apple.numbers", "com.apple.keynote", "openxmlformats"], ["办公", "office"]),
         (["com.apple.photos", "public.photo-library", "public.photos"], ["照片", "图库"]),
         (["public.epub", "com.apple.iBooks", "public.audible-content"], ["电子书", "阅读"]),
-        (["public.plain-text", "public.source-code", "public.script", "public.xml",
-          "public.json", "public.yaml"], ["文本", "代码", "text"]),
+        // 会写代码的工具在文档类型里声明源码/脚本 UTI，这是比分类强得多的证据。
+        (["public.source-code", "public.script", "public.shell-script", "public.swift-source",
+          "public.c-", "public.objective-c", "public.assembly", "public.unix-executable",
+          "public.git", "com.apple.xcode", "com.apple.swiftpm", "com.apple.dt.playground",
+          "com.apple.interfacebuilder"], ["开发", "代码", "code"]),
+        (["public.plain-text", "public.xml", "public.json", "public.yaml"], ["文本", "text"]),
     ]
 
     /// 由声明推出标签。返回顺序稳定：URL 方案（最强的行为证据）→ 文档类型 → 分类。

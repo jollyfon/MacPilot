@@ -326,6 +326,31 @@ struct DockGroupsCoreTests {
         try Data("hi".utf8).write(to: text)
         #expect(InstalledAppResolver.makeReference(from: text) == nil)
     }
+
+    @Test func anEmptyLocalizedDisplayNameDoesNotLeaveAnUnnamedReference() throws {
+        let root = try TemporaryDirectory()
+        defer { root.cleanUp() }
+        let app = root.url.appendingPathComponent("SanJuTong.app", isDirectory: true)
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        let english = contents.appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("en.lproj", isDirectory: true)
+        try FileManager.default.createDirectory(at: english, withIntermediateDirectories: true)
+        try """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict>
+          <key>CFBundleIdentifier</key><string>com.example.sanjutong</string>
+          <key>CFBundleDevelopmentRegion</key><string>en</string>
+        </dict></plist>
+        """.write(to: contents.appendingPathComponent("Info.plist"), atomically: true, encoding: .utf8)
+        // 真实存在的包（三局通）把两个名字键都覆盖成空串，而 `Bundle` 读可本地化的键
+        // 走的正是这张表：链式 `??` 会停在空值上，索引里留下一条没有名字的应用。
+        try "CFBundleDisplayName = \"\";\nCFBundleName = \"\";\n"
+            .write(to: english.appendingPathComponent("InfoPlist.strings"), atomically: true, encoding: .utf8)
+
+        #expect((Bundle(url: app)?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)?.isEmpty == true)
+        #expect(InstalledAppResolver.makeReference(from: app)?.name == "SanJuTong")
+    }
 }
 
 // MARK: - 测试辅助
