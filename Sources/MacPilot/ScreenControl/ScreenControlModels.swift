@@ -70,7 +70,8 @@ enum ScreenControlSuppressionPolicy {
         source != .bleAutomatic
     }
 
-    /// Only an explicit unlock clears the suppression again.
+    /// Explicit unlock commands clear suppression immediately. BLE also rearms
+    /// after a confirmed departure, allowing a later return to unlock.
     static func clearsAutomaticUnlockSuppression(source: ScreenControlSource) -> Bool {
         switch source {
         case .remoteExplicit, .localManual: return true

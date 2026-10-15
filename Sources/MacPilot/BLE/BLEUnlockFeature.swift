@@ -117,6 +117,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     var signalTimeoutScheduler: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> BackgroundTask = {
         BackgroundTask.once(after: $0, action: $1)
     }
+    var proximityTimeoutScheduler: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> BackgroundTask = {
+        BackgroundTask.once(after: $0, action: $1)
+    }
     private var unlockAttemptTask: Task<Void, Never>?
     private var unlockAttemptSlot = BLEUnlockAttemptSlot()
     private var unlockSignalTrigger = BLEUnlockSignalTrigger()
@@ -263,7 +266,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         if activeMode != isActive { activeMode = isActive }
     }
 
-    private func recomputePresence(reason: String) {
+    private func recomputePresence(reason: String, confirmedDeparture: Bool = false) {
         let oldPresence = presence
         let devicePresences = logicalDeviceStates { $0.presence }
         let newPresence = BLEDevicePresencePolicy.isSatisfied(
@@ -271,6 +274,11 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             relation: settings.deviceRelation
         )
         refreshPublishedMonitoringState()
+        if manualLock, confirmedDeparture, !newPresence {
+            manualLock = false
+            unlockSignalTrigger.reset()
+            log("automatic unlock rearmed reason=confirmedDeparture")
+        }
         guard oldPresence != newPresence else {
             log("combined presence unchanged value=\(newPresence) reason=\(reason) devices=\(devicePresences)")
             return
@@ -704,6 +712,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             wakeRetryTask?.cancel()
             wakeRetryTask = nil
             for runtime in monitoredRuntimes.values {
+                runtime.cancelProximityTimer()
                 runtime.activeModeTimer?.stop()
                 runtime.activeModeTimer = nil
                 runtime.activeMode = false
@@ -841,6 +850,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
         let estimated = estimatedRSSI(rssi, for: runtime)
         runtime.lastRSSI = estimated
+        runtime.lastRSSISampledAt = userActivityMonitor.now
         stopMonitoringRecovery(reason: "freshRSSI")
         runtime.activeMode = runtime.activeModeTimer != nil
         refreshPublishedMonitoringState()
@@ -851,16 +861,25 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             if runtime.proximityTimer != nil {
                 log("RSSI recovered above lock threshold estimated=\(estimated) threshold=\(lockThreshold); cancelling away timer")
             }
-            runtime.proximityTimer?.stop()
-            runtime.proximityTimer = nil
-        } else if runtime.presence && runtime.proximityTimer == nil {
+            runtime.cancelProximityTimer()
+        } else if (runtime.presence || manualLock) && runtime.proximityTimer == nil {
             log("RSSI below lock threshold estimated=\(estimated) threshold=\(lockThreshold); scheduling away timer seconds=\(settings.proximityTimeout)")
-            runtime.proximityTimer = BackgroundTask.once(after: TimeInterval(settings.proximityTimeout)) { [weak self] in
-                guard let self, let runtime = self.runtime(for: uuid) else { return }
+            runtime.proximityTimerGeneration &+= 1
+            let generation = runtime.proximityTimerGeneration
+            runtime.proximityTimer = proximityTimeoutScheduler(TimeInterval(settings.proximityTimeout)) { [weak self, weak runtime] in
+                guard let self, let runtime,
+                      self.runtime(for: uuid) === runtime,
+                      runtime.proximityTimerGeneration == generation else { return }
+                runtime.proximityTimerGeneration &+= 1
                 self.log("away timer fired uuid=\(uuid.uuidString) estimatedRSSI=\(runtime.lastRSSI.map(String.init) ?? "none")")
+                let currentThreshold = self.settings.lockRSSI == Self.lockDisabled
+                    ? self.settings.unlockRSSI : self.settings.lockRSSI
+                let sampleAge = runtime.lastRSSISampledAt.map { self.userActivityMonitor.now - $0 }
+                let sampleIsFresh = sampleAge.map { $0 >= 0 && $0 < TimeInterval(self.settings.signalTimeout) } == true
+                let confirmedDeparture = sampleIsFresh && runtime.lastRSSI.map { $0 < currentThreshold } == true
                 runtime.presence = false
                 runtime.proximityTimer = nil
-                self.recomputePresence(reason: "away")
+                self.recomputePresence(reason: "away", confirmedDeparture: confirmedDeparture)
             }
         }
         resetSignalTimer(for: uuid)
@@ -1348,6 +1367,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private func suppressAutomaticUnlock(reason: String) {
         manualLock = true
+        // A departure window must start from a fresh distant sample after this
+        // lock, rather than inheriting an old timer or a recovery reset.
+        for runtime in monitoredRuntimes.values { runtime.cancelProximityTimer() }
         cancelUnlockAttempt(reason: reason)
         wakeRetryTask?.cancel()
         wakeRetryTask = nil
@@ -1555,8 +1577,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             } else {
                 log("presence loss did not lock screen alreadyLocked=\(isScreenLocked()) lockRSSIDisabled=\(settings.lockRSSI == Self.lockDisabled)")
             }
-            // A missing/weak signal is not an explicit unlock. Keep a manual
-            // lock protected even if the phone leaves, reconnects or times out.
+            // Silence/recovery alone cannot rearm a manual lock. A sustained
+            // distant RSSI window rearms it in recomputePresence, so the next
+            // fresh close sample can unlock after a real departure and return.
         }
     }
 
@@ -1758,8 +1781,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 runtime.lastRSSI = nil
                 runtime.latestRSSIs.removeAll(keepingCapacity: true)
                 runtime.presence = false
-                runtime.proximityTimer?.stop()
-                runtime.proximityTimer = nil
+                runtime.cancelProximityTimer()
                 // The pre-sleep deadline must not interrupt the cold reconnect.
                 // Presence stays false; this extends recovery, never RSSI validity.
                 resetSignalTimer(for: runtime.uuid, minimumDelay: BLEConnectionRetryGate.connectionTimeout)

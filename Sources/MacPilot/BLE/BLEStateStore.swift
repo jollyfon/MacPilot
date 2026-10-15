@@ -7,11 +7,13 @@ final class BLEMonitoredDeviceRuntime {
     var peripheral: CBPeripheral?
     var presence = false
     var lastRSSI: Int?
+    var lastRSSISampledAt: TimeInterval?
     var activeMode = false
     var latestRSSIs: [Double] = []
     var rssiReadGate = BLERequestGate()
     var connectionRetryGate = BLEConnectionRetryGate()
     var proximityTimer: BackgroundTask?
+    var proximityTimerGeneration: UInt64 = 0
     var signalTimer: BackgroundTask?
     var signalTimerGeneration: UInt64 = 0
     var activeModeTimer: BackgroundTask?
@@ -22,9 +24,14 @@ final class BLEMonitoredDeviceRuntime {
         self.uuid = uuid
     }
 
-    func invalidateTimers() {
+    func cancelProximityTimer() {
         proximityTimer?.stop()
         proximityTimer = nil
+        proximityTimerGeneration &+= 1
+    }
+
+    func invalidateTimers() {
+        cancelProximityTimer()
         signalTimer?.stop()
         signalTimer = nil
         signalTimerGeneration &+= 1
