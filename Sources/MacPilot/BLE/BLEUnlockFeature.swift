@@ -64,8 +64,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             // A remote or manual lock outranks the proximity auto-unlock: the
             // paired iPhone may still be sitting right next to the Mac.
             if ScreenControlSuppressionPolicy.suppressesAutomaticUnlock(source: source) {
-                self.manualLock = true
-                self.cancelUnlockAttempt(reason: "lock-\(source.rawValue)")
+                self.suppressAutomaticUnlock(reason: "lock-\(source.rawValue)")
             }
         }
         screenControl.didUnlock = { [weak self] source, date in
@@ -134,6 +133,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
     var workspaceNotificationCenterOverride: NotificationCenter?
     var heldBlankNotificationCenterOverride: NotificationCenter?
+    var screenStateNotificationCenterOverride: NotificationCenter?
     var screenLockStateProbe: () -> BLEScreenLockState = { ScreenLockStateReader.current() }
     private var manualLock = false
     private var pendingLockSource: ScreenLockHistorySource?
@@ -1198,8 +1198,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             return
         }
         log("manual lock requested")
-        manualLock = true
-        cancelUnlockAttempt()
+        suppressAutomaticUnlock(reason: "lock-localManual")
         pauseNowPlaying()
         lockOrSaveScreen(source: .localManual)
     }
@@ -1224,6 +1223,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
         pendingLockSource = nil
         pendingLockSourceExpiresAt = .distantPast
+
+        // A system shortcut/menu lock never passes through screenControl.willLock.
+        // Unattributed locks must withdraw proximity permission immediately,
+        // including an attempt queued before this notification or a duplicate
+        // notification whose history entry is already open.
+        screenUnlockConfirmationTask?.stop()
+        screenUnlockConfirmationTask = nil
+        if source != .automatic {
+            suppressAutomaticUnlock(reason: "screenIsLocked-\(source.rawValue)")
+        }
 
         guard settings.screenLockHistory.recordLock(at: date, source: source) else {
             log("screen lock history ignored reason=duplicate source=\(source.rawValue)")
@@ -1335,6 +1344,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         unlockAttemptSlot.invalidate()
         unlockSignalTrigger.reset()
         lastUnlockRequestAt = 0
+    }
+
+    private func suppressAutomaticUnlock(reason: String) {
+        manualLock = true
+        cancelUnlockAttempt(reason: reason)
+        wakeRetryTask?.cancel()
+        wakeRetryTask = nil
+        lastAutomaticUnlockRequestAt = 0
+        lastAutomaticUnlockConfirmationAt = 0
+        log("automatic unlock suppressed reason=\(reason)")
     }
 
     private func formattedUnlockAge(_ age: TimeInterval?) -> String {
@@ -1500,6 +1519,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             return
         }
         if presence {
+            guard !manualLock else {
+                log("presence close ignored reason=manualLock")
+                return
+            }
             if settings.unlockRSSI != Self.unlockDisabled {
                 if displaySleep && !systemSleep && settings.wakeOnProximity {
                     log("waking display due to proximity reason=\(reason)")
@@ -1532,7 +1555,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             } else {
                 log("presence loss did not lock screen alreadyLocked=\(isScreenLocked()) lockRSSIDisabled=\(settings.lockRSSI == Self.lockDisabled)")
             }
-            manualLock = false
+            // A missing/weak signal is not an explicit unlock. Keep a manual
+            // lock protected even if the phone leaves, reconnects or times out.
         }
     }
 
@@ -2012,7 +2036,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             }
         }, center: nc)
 
-        let dnc = DistributedNotificationCenter.default
+        let dnc = screenStateNotificationCenterOverride ?? DistributedNotificationCenter.default
         observers.add(dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.recordScreenLock(at: Date())
