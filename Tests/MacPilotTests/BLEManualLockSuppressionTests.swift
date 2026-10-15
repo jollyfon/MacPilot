@@ -27,6 +27,7 @@ struct BLEManualLockSuppressionTests {
         model.settings.unlockRSSI = -70
         if let departures {
             model.proximityTimeoutScheduler = { departures.schedule(after: $0, action: $1) }
+            model.signalTimeoutScheduler = { departures.scheduleSignal(after: $0, action: $1) }
         }
         model.startObservingSystemState()
         let phone = UUID()
@@ -264,17 +265,173 @@ struct BLEManualLockSuppressionTests {
         #expect(!model.activeConnectionsPaused)
         #expect(!model.isUnlockAttemptScheduled)
     }
+
+    @Test func aFullActiveSignalTimeoutAndReturnRearmsEveryManualLockSource() throws {
+        for source in [nil, ScreenControlSource.localManual, .remoteExplicit] {
+            let departures = ManualLockDepartureClock()
+            let (model, center, phone) = makeModel(departures: departures)
+            defer { model.shutdown() }
+            model.settings.lockRSSI = -80
+            model.updateMonitoredPeripheral(-50, for: phone)
+            if let source { model.screenControl.willLock?(source) }
+            center.post(name: lockedNotification, object: nil)
+            let timeout = try #require(departures.signalActions.last)
+
+            departures.now += TimeInterval(model.settings.signalTimeout)
+            timeout()
+            #expect(!model.presence)
+            #expect(!model.isUnlockAttemptScheduled)
+            model.updateMonitoredPeripheral(-45, for: phone)
+
+            #expect(!model.activeConnectionsPaused)
+            #expect(model.isUnlockAttemptScheduled)
+        }
+    }
+
+    @Test func aNewManualLockCannotInheritANearlyExpiredSignalTimeout() throws {
+        let departures = ManualLockDepartureClock()
+        let (model, center, phone) = makeModel(departures: departures)
+        defer { model.shutdown() }
+        model.settings.lockRSSI = -80
+        model.updateMonitoredPeripheral(-50, for: phone)
+        let oldTimeout = try #require(departures.signalActions.last)
+        departures.now += TimeInterval(model.settings.signalTimeout) - 1
+        center.post(name: lockedNotification, object: nil)
+        departures.now += 1
+
+        oldTimeout()
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(!model.isUnlockAttemptScheduled)
+
+        // Only the current, complete observation window can rearm this lock.
+        let currentTimeout = try #require(departures.signalActions.last)
+        departures.now += TimeInterval(model.settings.signalTimeout)
+        currentTimeout()
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(model.isUnlockAttemptScheduled)
+    }
+
+    @Test func aFullTimeoutDuringDisplaySleepCannotRearmAManualLock() throws {
+        let departures = ManualLockDepartureClock()
+        let (model, center, phone) = makeModel(departures: departures)
+        defer { model.shutdown() }
+        model.settings.lockRSSI = -80
+        model.updateMonitoredPeripheral(-50, for: phone)
+        center.post(name: lockedNotification, object: nil)
+        let timeout = try #require(departures.signalActions.last)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        departures.now += TimeInterval(model.settings.signalTimeout)
+
+        timeout()
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
+
+        #expect(!model.isUnlockAttemptScheduled)
+    }
+
+    @Test func resumedMonitoringNeedsANewSignalBeforeTimeoutCanRearm() throws {
+        for restartMonitoring in [false, true] {
+            let departures = ManualLockDepartureClock()
+            let (model, center, phone) = makeModel(departures: departures)
+            defer { model.shutdown() }
+            model.settings.lockRSSI = -80
+            model.updateMonitoredPeripheral(-50, for: phone)
+            center.post(name: lockedNotification, object: nil)
+            if restartMonitoring {
+                model.startMonitor(phone)
+            } else {
+                model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+                model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+            }
+            let unobservedTimeout = try #require(departures.signalActions.last)
+            departures.now += TimeInterval(model.settings.signalTimeout) + 1
+
+            unobservedTimeout()
+            model.updateMonitoredPeripheral(-45, for: phone)
+
+            #expect(!model.isUnlockAttemptScheduled)
+        }
+    }
+
+    @Test func timeoutWithoutAnyDeviceSampleCannotRearmAManualLock() throws {
+        let departures = ManualLockDepartureClock()
+        let (model, center, phone) = makeModel(departures: departures)
+        defer { model.shutdown() }
+        model.settings.lockRSSI = -80
+        center.post(name: lockedNotification, object: nil)
+        let unobservedTimeout = try #require(departures.signalActions.last)
+        departures.now += TimeInterval(model.settings.signalTimeout)
+
+        unobservedTimeout()
+        model.updateMonitoredPeripheral(-45, for: phone)
+
+        #expect(!model.isUnlockAttemptScheduled)
+    }
+
+    @Test func oneTimedOutDeviceCannotRearmWhileAnotherAnyDeviceIsStillNearby() throws {
+        let departures = ManualLockDepartureClock()
+        let (model, center, phone) = makeModel(departures: departures)
+        defer { model.shutdown() }
+        model.settings.lockRSSI = -80
+        let watch = UUID()
+        model.secondaryMonitoredUUID = watch
+        model.settings.secondaryMonitoredDeviceUUID = watch.uuidString
+        model.settings.deviceRelation = .any
+        model.startMonitor(phone)
+        model.updateMonitoredPeripheral(-50, for: phone)
+        model.updateMonitoredPeripheral(-50, for: watch)
+        center.post(name: lockedNotification, object: nil)
+
+        departures.now += TimeInterval(model.settings.signalTimeout) - 1
+        model.updateMonitoredPeripheral(-50, for: watch)
+        departures.now += 1
+        model.handleMonitoredSignalTimeout(for: phone)
+        #expect(model.presence)
+        model.updateMonitoredPeripheral(-45, for: watch)
+        #expect(!model.isUnlockAttemptScheduled)
+
+        departures.now += TimeInterval(model.settings.signalTimeout)
+        model.handleMonitoredSignalTimeout(for: watch)
+        #expect(!model.presence)
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(model.isUnlockAttemptScheduled)
+    }
+
+    @Test func freshNearbySamplesKeepAManualLockProtectedAcrossOldTimeoutDeadlines() throws {
+        let departures = ManualLockDepartureClock()
+        let (model, center, phone) = makeModel(departures: departures)
+        defer { model.shutdown() }
+        model.settings.lockRSSI = -80
+        model.updateMonitoredPeripheral(-50, for: phone)
+        center.post(name: lockedNotification, object: nil)
+        let oldTimeout = try #require(departures.signalActions.last)
+
+        departures.now += TimeInterval(model.settings.signalTimeout) / 2
+        model.updateMonitoredPeripheral(-45, for: phone)
+        departures.now += TimeInterval(model.settings.signalTimeout) / 2
+        oldTimeout()
+        model.updateMonitoredPeripheral(-45, for: phone)
+
+        #expect(model.presence)
+        #expect(!model.isUnlockAttemptScheduled)
+    }
 }
 
 @MainActor
 private final class ManualLockDepartureClock {
     var now: TimeInterval = 100
     var actions: [@MainActor () -> Void] = []
+    var signalActions: [@MainActor () -> Void] = []
 
     func schedule(after delay: TimeInterval, action: @escaping @MainActor () -> Void) -> BackgroundTask {
         actions.append(action)
         // The test fires the production callback synchronously. No real screen
         // control, credential lookup or elapsed-time assertion is involved.
+        return BackgroundTask.once(after: 3_600, action: {})
+    }
+
+    func scheduleSignal(after delay: TimeInterval, action: @escaping @MainActor () -> Void) -> BackgroundTask {
+        signalActions.append(action)
         return BackgroundTask.once(after: 3_600, action: {})
     }
 }

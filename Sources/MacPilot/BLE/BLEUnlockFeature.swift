@@ -713,6 +713,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             wakeRetryTask = nil
             for runtime in monitoredRuntimes.values {
                 runtime.cancelProximityTimer()
+                runtime.signalObservationIsContinuous = false
                 runtime.activeModeTimer?.stop()
                 runtime.activeModeTimer = nil
                 runtime.activeMode = false
@@ -801,7 +802,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         runtime.signalTimer?.stop()
         runtime.signalTimerGeneration &+= 1
         let generation = runtime.signalTimerGeneration
-        runtime.signalTimer = signalTimeoutScheduler(max(TimeInterval(settings.signalTimeout), minimumDelay)) { [weak self, weak runtime] in
+        let delay = max(TimeInterval(settings.signalTimeout), minimumDelay)
+        runtime.signalTimeoutDeadline = userActivityMonitor.now + delay
+        runtime.signalTimer = signalTimeoutScheduler(delay) { [weak self, weak runtime] in
             guard let self, let runtime else { return }
             guard self.runtime(for: uuid) === runtime, runtime.signalTimerGeneration == generation else {
                 self.log("signal timeout ignored reason=superseded uuid=\(uuid.uuidString)")
@@ -814,12 +817,19 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     func handleMonitoredSignalTimeout(for uuid: UUID) {
         guard let runtime = runtime(for: uuid) else { return }
         log("signal timeout fired uuid=\(uuid.uuidString) timeout=\(settings.signalTimeout) devicePresence=\(runtime.presence)")
+        // Normal monitoring's full no-signal window is also a departure. A
+        // deliberate pause/reset must never manufacture that evidence.
+        let confirmedDeparture = manualLock && runtime.signalObservationIsContinuous
+            && runtime.lastRSSI != nil && !activeConnectionsPaused && !systemSleep
+            && runtime.signalTimeoutDeadline.map { userActivityMonitor.now >= $0 } == true
+        runtime.signalObservationIsContinuous = false
+        runtime.signalTimeoutDeadline = nil
         runtime.signalTimer = nil
         runtime.lastRSSI = nil
         runtime.activeMode = false
-        if runtime.presence {
+        if runtime.presence || confirmedDeparture {
             runtime.presence = false
-            recomputePresence(reason: "lost")
+            recomputePresence(reason: "lost", confirmedDeparture: confirmedDeparture)
         } else {
             refreshPublishedMonitoringState()
         }
@@ -851,6 +861,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         let estimated = estimatedRSSI(rssi, for: runtime)
         runtime.lastRSSI = estimated
         runtime.lastRSSISampledAt = userActivityMonitor.now
+        runtime.signalObservationIsContinuous = !activeConnectionsPaused && !systemSleep
         stopMonitoringRecovery(reason: "freshRSSI")
         runtime.activeMode = runtime.activeModeTimer != nil
         refreshPublishedMonitoringState()
@@ -1025,6 +1036,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             }
         default:
             log("bluetooth unavailable state=\(String(describing: central.state))")
+            for runtime in monitoredRuntimes.values {
+                runtime.signalObservationIsContinuous = false
+                runtime.cancelProximityTimer()
+            }
             break
         }
     }
@@ -1369,7 +1384,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         manualLock = true
         // A departure window must start from a fresh distant sample after this
         // lock, rather than inheriting an old timer or a recovery reset.
-        for runtime in monitoredRuntimes.values { runtime.cancelProximityTimer() }
+        for runtime in monitoredRuntimes.values {
+            runtime.cancelProximityTimer()
+            let sampleAge = runtime.lastRSSISampledAt.map { userActivityMonitor.now - $0 }
+            let sampleIsFresh = sampleAge.map { $0 >= 0 && $0 < TimeInterval(settings.signalTimeout) } == true
+            runtime.signalObservationIsContinuous = runtime.signalObservationIsContinuous
+                && runtime.lastRSSI != nil && sampleIsFresh && !activeConnectionsPaused
+            // Every lock gets a complete observation window. An old timer
+            // about to expire cannot immediately undo a new manual lock.
+            resetSignalTimer(for: runtime.uuid)
+        }
         cancelUnlockAttempt(reason: reason)
         wakeRetryTask?.cancel()
         wakeRetryTask = nil
@@ -1577,9 +1601,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             } else {
                 log("presence loss did not lock screen alreadyLocked=\(isScreenLocked()) lockRSSIDisabled=\(settings.lockRSSI == Self.lockDisabled)")
             }
-            // Silence/recovery alone cannot rearm a manual lock. A sustained
-            // distant RSSI window rearms it in recomputePresence, so the next
-            // fresh close sample can unlock after a real departure and return.
+            // Only a sustained distant RSSI window or a full signal timeout
+            // under uninterrupted monitoring rearms a manual lock. Pause and
+            // recovery resets cannot replace a departure observation.
         }
     }
 
@@ -1779,6 +1803,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         if clearSignal {
             for runtime in monitoredRuntimes.values {
                 runtime.lastRSSI = nil
+                runtime.signalObservationIsContinuous = false
                 runtime.latestRSSIs.removeAll(keepingCapacity: true)
                 runtime.presence = false
                 runtime.cancelProximityTimer()
