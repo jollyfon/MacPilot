@@ -179,7 +179,7 @@ enum QuickSearchMatcher {
 struct QuickSearchRankedResult<Value: Sendable>: Sendable {
     let value: Value
     let match: QuickSearchMatch
-    /// 历史使用次数，同级匹配时高者在前。
+    /// 历史打开次数，**排序的第一依据**：同一个查询下用过多次的排在前。
     let usageCount: Int
     /// 稳定次序用的名称与路径。
     let stableName: String
@@ -187,13 +187,17 @@ struct QuickSearchRankedResult<Value: Sendable>: Sendable {
 }
 
 enum QuickSearchRanking {
-    /// 声明顺序即优先级：匹配程度 → 使用频率 → 位置 → 代价 → 稳定次序。
+    /// 声明顺序即优先级：使用频率 → 匹配程度 → 位置 → 代价 → 稳定次序。
+    ///
+    /// 频率在匹配程度之前是有意的：输入「abc」出来一排同名候选时，用户要的是
+    /// 那一个被反复打开的，不是名字里字母排得最正的。次数相同才回头比匹配质量，
+    /// 所以从没用过的东西依然按名字排。
     static func orderedByRelevance<Value>(
         _ lhs: QuickSearchRankedResult<Value>,
         _ rhs: QuickSearchRankedResult<Value>
     ) -> Bool {
-        if lhs.match.tier != rhs.match.tier { return lhs.match.tier < rhs.match.tier }
         if lhs.usageCount != rhs.usageCount { return lhs.usageCount > rhs.usageCount }
+        if lhs.match.tier != rhs.match.tier { return lhs.match.tier < rhs.match.tier }
         if lhs.match.position != rhs.match.position { return lhs.match.position < rhs.match.position }
         if lhs.match.gap != rhs.match.gap { return lhs.match.gap < rhs.match.gap }
         let nameOrder = lhs.stableName.localizedCaseInsensitiveCompare(rhs.stableName)
@@ -209,5 +213,26 @@ enum QuickSearchRanking {
         let sorted = candidates.sorted(by: orderedByRelevance)
         guard limit >= 0 else { return sorted }
         return Array(sorted.prefix(limit))
+    }
+}
+
+/// 只按打开次数排序，其余顺序原样保留。
+///
+/// Spotlight 回来的文件顺序已经是它自己的相关性排序，这里没有名称分级可比，
+/// 所以规则是「打开过的提到前面，次数相同保持 Spotlight 的顺序」。显式带上
+/// 下标做次级键，因为 Swift 的 `sorted` 不保证稳定。
+enum QuickSearchFrequencyOrder {
+    static func ordered<Value>(
+        _ values: [Value],
+        usageCount: (Value) -> Int
+    ) -> [Value] {
+        values.enumerated()
+            .sorted { lhs, rhs in
+                let left = usageCount(lhs.element)
+                let right = usageCount(rhs.element)
+                if left != right { return left > right }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
     }
 }

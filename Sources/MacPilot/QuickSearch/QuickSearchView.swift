@@ -28,9 +28,11 @@ struct QuickSearchPanelContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            dragHeader
+
             inputRow
                 .padding(.horizontal, 12)
-                .padding(.top, 12)
+                .padding(.top, 4)
                 .padding(.bottom, 8)
 
             resultsArea
@@ -57,6 +59,39 @@ struct QuickSearchPanelContent: View {
             transaction.animation = nil
             transaction.disablesAnimations = true
         }
+    }
+
+    // MARK: 顶栏抓手
+
+    /// 拖动面。SwiftUI 的内容不会可靠地把「可移动背景」上的鼠标事件透传给
+    /// `NSHostingView`，所以这块交给一个明确的 AppKit 视图（与剪贴板面板同一做法）。
+    /// 记住过位置时右侧给一个「回到默认位置」，不靠隐藏手势。
+    private var dragHeader: some View {
+        ZStack {
+            QuickSearchPanelDragHandle()
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.quaternary)
+            HStack(spacing: 0) {
+                Spacer()
+                if model.panelPosition != nil {
+                    Button {
+                        model.resetPanelPosition()
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(model.t("quickSearchResetPosition"))
+                }
+            }
+            .padding(.trailing, 8)
+        }
+        .frame(height: QuickSearchPanelLayout.headerHeight)
+        .help(model.t("quickSearchDragHint"))
     }
 
     // MARK: 输入行
@@ -111,6 +146,7 @@ struct QuickSearchPanelContent: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 2) {
+                        let favoriteLabel = model.t("quickSearchFavoriteMark")
                         ForEach(Array(model.results.enumerated()), id: \.element.id) { index, result in
                             QuickSearchResultRow(
                                 result: result,
@@ -120,6 +156,8 @@ struct QuickSearchPanelContent: View {
                                     key: result.iconKey
                                 ),
                                 isSelected: index == model.selectedRowIndex,
+                                isFavorite: model.favoriteIdentities.contains(result.favoriteIdentity),
+                                favoriteLabel: favoriteLabel,
                                 categoryLabel: model.t(result.categoryKey)
                             ) {
                                 model.selectRow(at: index)
@@ -128,6 +166,24 @@ struct QuickSearchPanelContent: View {
                             }
                             .id(result.id)
                             .padding(.horizontal, 8)
+                            // 右键菜单作用在这一行上，动作也直接带着这一条结果：
+                            // 指针划过会把选中行挪到右键处，但菜单不能因此打到别的条目。
+                            .contextMenu {
+                                Button(model.t("quickSearchHintOpen")) {
+                                    model.performPrimaryAction(on: result)
+                                }
+                                Button(model.t("quickSearchHintReveal")) {
+                                    model.revealSelectionInFinder(on: result)
+                                }
+                                Divider()
+                                Button(
+                                    model.t(model.isFavorite(result)
+                                            ? "quickSearchMenuRemoveFavorite"
+                                            : "quickSearchMenuAddFavorite")
+                                ) {
+                                    model.toggleFavorite(result)
+                                }
+                            }
                         }
                     }
                     .padding(.vertical, 3)
@@ -199,12 +255,33 @@ struct QuickSearchPanelContent: View {
     }
 }
 
+// MARK: - 拖动面
+
+private struct QuickSearchPanelDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> DragHandleView { DragHandleView() }
+    func updateNSView(_ nsView: DragHandleView, context: Context) {}
+
+    final class DragHandleView: NSView {
+        override var acceptsFirstResponder: Bool { false }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .openHand)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            (window as? QuickSearchPanel)?.dragFromHeader(with: event)
+        }
+    }
+}
+
 // MARK: - 结果行
 
 private struct QuickSearchResultRow: View {
     let result: QuickSearchResult
     let icon: NSImage?
     let isSelected: Bool
+    let isFavorite: Bool
+    let favoriteLabel: String
     let categoryLabel: String
     let onSelect: () -> Void
     let onActivate: () -> Void
@@ -225,6 +302,14 @@ private struct QuickSearchResultRow: View {
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
+                // 收藏只用一枚星标说明，不占分类标签的位置：加表头会把
+                // 固定行高与键盘下标的对应关系打散。
+                if isFavorite {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .systemYellow))
+                        .accessibilityLabel(favoriteLabel)
+                }
                 Text(categoryLabel)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(isSelected ? Color(nsColor: .controlAccentColor) : Color.secondary.opacity(0.7))

@@ -336,6 +336,7 @@ private final class FakePanel: QuickSearchPanelPresenting {
     private var hasClosed = false
     private(set) var isPresented = false
     private(set) var openCount = 0
+    private(set) var placementCount = 0
 
     init(ledger: PanelLedger, onClose: @escaping () -> Void) {
         self.ledger = ledger
@@ -346,6 +347,10 @@ private final class FakePanel: QuickSearchPanelPresenting {
     func open() {
         isPresented = true
         openCount += 1
+    }
+
+    func applyPlacement() {
+        placementCount += 1
     }
 
     func close() {
@@ -2582,4 +2587,221 @@ private final class LockedFlag: @unchecked Sendable {
 
     var value: Bool { lock.withLock { stored } }
     func set(_ newValue: Bool) { lock.withLock { stored = newValue } }
+}
+
+// MARK: - 面板位置
+
+@MainActor
+struct QuickSearchPanelPositionTests {
+    @Test func aDraggedPanelRemembersItsSpotAndWritesItOnce() {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        var persistCount = 0
+        harness.model.persist = { persistCount += 1 }
+
+        harness.model.rememberPanelPosition(QuickSearchPanelPosition(x: 120, y: 700))
+        #expect(harness.model.panelPosition == QuickSearchPanelPosition(x: 120, y: 700))
+        #expect(persistCount == 1)
+
+        // 一次拖布里 AppKit 会连发多次移动通知：同一点不该反复写配置。
+        harness.model.rememberPanelPosition(QuickSearchPanelPosition(x: 120, y: 700))
+        #expect(persistCount == 1)
+
+        harness.model.rememberPanelPosition(QuickSearchPanelPosition(x: 140, y: 700))
+        #expect(persistCount == 2)
+    }
+
+    @Test func anUnusablePositionIsRefusedInsteadOfStored() {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        var persistCount = 0
+        harness.model.persist = { persistCount += 1 }
+
+        harness.model.rememberPanelPosition(QuickSearchPanelPosition(x: .nan, y: 700))
+
+        #expect(harness.model.panelPosition == nil)
+        #expect(persistCount == 0)
+    }
+
+    @Test func resettingClearsTheRecordAndReplacesTheOpenPanel() async {
+        let harness = Harness()
+        await harness.enable(entries: sampleApps)
+        defer { harness.model.shutdown() }
+        harness.model.openPanel()
+        harness.model.rememberPanelPosition(QuickSearchPanelPosition(x: 120, y: 700))
+        guard let panel = harness.lastPanel else {
+            Issue.record("面板没有被创建")
+            return
+        }
+        let placementsBefore = panel.placementCount
+
+        harness.model.resetPanelPosition()
+
+        #expect(harness.model.panelPosition == nil)
+        // 用户点「回到默认位置」要立刻看到面板挪回去，而不是下次呼出生效。
+        #expect(panel.placementCount == placementsBefore + 1)
+    }
+
+    @Test func resettingWithoutARememberedPositionChangesNothing() {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        var persistCount = 0
+        harness.model.persist = { persistCount += 1 }
+
+        harness.model.resetPanelPosition()
+
+        #expect(persistCount == 0)
+    }
+}
+
+// MARK: - 收藏与空查询那一屏
+
+@MainActor
+struct QuickSearchFavoritesModelTests {
+    @Test func emptyQueryListsFavoritesBeforeRecentlyUsedApps() async {
+        let harness = Harness()
+        await harness.enable(entries: sampleApps)
+        defer { harness.model.shutdown() }
+        harness.model.usage.recordLaunch(of: sampleApps[1])
+        harness.model.toggleFavorite(QuickSearchResult(application: sampleApps[0]))
+
+        harness.model.openPanel()
+
+        // 钉住的 Safari 排第一，「计算器」作为最近使用跟在后面。
+        #expect(harness.model.results.map(\.title) == ["Safari", "计算器"])
+        #expect(harness.model.isFavorite(harness.model.results[0]))
+        #expect(!harness.model.isFavorite(harness.model.results[1]))
+    }
+
+    @Test func togglingFavoriteRedrawsTheEmptyQueryScreenThatIsAlreadyOpen() async {
+        let harness = Harness()
+        await harness.enable(entries: sampleApps)
+        defer { harness.model.shutdown() }
+        harness.model.openPanel()
+        let target = QuickSearchResult(application: sampleApps[0])
+
+        harness.model.toggleFavorite(target)
+        #expect(harness.model.results.map(\.title) == ["Safari"])
+        #expect(harness.model.settings.favorites.count == 1)
+
+        harness.model.toggleFavorite(target)
+        #expect(harness.model.results.isEmpty)
+        #expect(harness.model.settings.favorites.isEmpty)
+    }
+
+    @Test func favoritingAResultRowRemembersItUnderItsOwnIdentity() async {
+        let harness = Harness()
+        await harness.enable(entries: sampleApps)
+        defer { harness.model.shutdown() }
+        var persistCount = 0
+        harness.model.persist = { persistCount += 1 }
+        harness.model.openPanel()
+        harness.model.updateQuery("safari")
+        guard let row = harness.model.results.first else {
+            Issue.record("搜索 safari 没有结果")
+            return
+        }
+
+        harness.model.toggleFavorite(row)
+
+        #expect(harness.model.favoriteIdentities == [row.favoriteIdentity])
+        #expect(harness.model.settings.favorites.first?.title == "Safari")
+        #expect(persistCount == 1)
+        // 右键收藏之后，这一行还在原位：不能因为重排把选中行弄丢。
+        #expect(harness.model.results.first?.title == "Safari")
+    }
+
+    @Test func favoritesSurviveASettingsReload() async {
+        let harness = Harness()
+        await harness.enable(entries: sampleApps)
+        defer { harness.model.shutdown() }
+        let favorite = QuickSearchFavorite(result: QuickSearchResult(application: sampleApps[0]))
+
+        harness.model.applyLoadedSettings(
+            QuickSearchSettings(isEnabled: true, hotkey: Harness.quietHotkey, favorites: [favorite])
+        )
+        harness.model.openPanel()
+
+        #expect(harness.model.results.map(\.title) == ["Safari"])
+    }
+
+    @Test func openingAFileCountsAsOneUseAndSortsAheadNextTime() async {
+        let harness = Harness()
+        await harness.enable(entries: [])
+        defer { harness.model.shutdown() }
+        let hits = [fileHit("/Users/me/Desktop/a-报告.pdf"), fileHit("/Users/me/Desktop/b-报告.pdf")]
+
+        harness.model.openPanel()
+        harness.model.updateQuery("报告")
+        harness.clock.fireAll()
+        harness.fileQuery.deliverLatest(.results(hits: hits, isFinal: true, issue: nil))
+        let second = harness.model.fileResults.first(where: { $0.url.lastPathComponent.hasPrefix("b") })
+        guard let target = second else {
+            Issue.record("文件结果里没有 b-报告.pdf")
+            return
+        }
+
+        harness.model.performPrimaryAction(on: target)
+        #expect(harness.fileOpener.opened.map(\.lastPathComponent) == ["b-报告.pdf"])
+        #expect(harness.model.usage.count(forIdentity: target.favoriteIdentity) == 1)
+
+        // 下一次同样的查询，Spotlight 回来的顺序没变，但打开过的那条提到最前。
+        harness.model.openPanel()
+        harness.model.updateQuery("报告")
+        harness.clock.fireAll()
+        harness.fileQuery.deliverLatest(.results(hits: hits, isFinal: true, issue: nil))
+        #expect(harness.model.fileResults.first?.url.lastPathComponent == "b-报告.pdf")
+    }
+
+    @Test func aFailedFileOpenDoesNotCountAsAUse() async {
+        let harness = Harness()
+        await harness.enable(entries: [])
+        defer { harness.model.shutdown() }
+        harness.fileOpener.failure = .openFailed(name: "a-报告.pdf")
+
+        harness.model.openPanel()
+        harness.model.updateQuery("报告")
+        harness.clock.fireAll()
+        harness.fileQuery.deliverLatest(.results(hits: [fileHit("/Users/me/Desktop/a-报告.pdf")], isFinal: true, issue: nil))
+        harness.model.performPrimaryAction(on: harness.model.fileResults.first)
+
+        #expect(harness.model.usage.recordCount == 0)
+        #expect(harness.notice.presented.count == 1)
+    }
+}
+
+// MARK: - 真实窗口的落位
+
+@MainActor
+struct QuickSearchRealPanelPlacementTests {
+    /// 只创建窗口、不 order-front：与性能套件同一做法，不会在用户桌面上闪出面板。
+    /// 纯函数那边已经证明算得对，这里要证的是真的窗口按算出来的 frame 落了位。
+    @Test func theWindowLandsOnTheRememberedSpotAndComesBackAfterAReset() throws {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        let panel = QuickSearchPanel(model: harness.model, onClose: {})
+        defer { panel.close() }
+        guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else {
+            throw MissingScreenError()
+        }
+
+        // 钉在可见区里、离边 40pt 的一个点：不管用户的屏幕多大都放得下。
+        let saved = QuickSearchPanelPosition(x: visible.minX + 40, y: visible.maxY - 40)
+        harness.model.rememberPanelPosition(saved)
+        panel.applyPlacement()
+
+        #expect(abs(panel.frame.minX - saved.x) < 1)
+        // 存的是左上角，还原之后上沿必须还是那个上沿。
+        #expect(abs(panel.frame.maxY - saved.y) < 1)
+
+        harness.model.resetPanelPosition()
+        panel.applyPlacement()
+
+        #expect(harness.model.panelPosition == nil)
+        // 回到默认位置：整块面板必须仍在可见区内，不靠具体的居中数值。
+        let screen = try #require((panel.screen ?? NSScreen.main)?.visibleFrame)
+        #expect(screen.insetBy(dx: -1, dy: -1).contains(panel.frame))
+    }
+
+    private struct MissingScreenError: Error {}
 }

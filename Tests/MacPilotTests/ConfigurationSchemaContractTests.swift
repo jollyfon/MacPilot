@@ -85,6 +85,30 @@ struct ConfigurationSchemaContractTests {
         try assertEncodedKeys(of: settings.panelPosition, supersetOf: ["x", "y"])
     }
 
+    @Test func quickSearchSettingsEncodeEveryHistoricalKeyIncludingPositionAndFavorites() throws {
+        var settings = QuickSearchSettings()
+        // 可选键在 nil 时不编码，显式赋值才能让它们进入键集（与 AwakeSettings 那条同理）。
+        settings.panelPosition = QuickSearchPanelPosition(x: 120, y: 700)
+        settings.favorites = [
+            QuickSearchFavorite(
+                identity: "bid:com.test.a", path: "/Applications/A.app", kind: .application,
+                title: "A", subtitle: "/Applications", bundleIdentifier: "com.test.a"
+            )
+        ]
+        try assertEncodedKeys(
+            of: settings,
+            supersetOf: [
+                "isEnabled", "hotkey", "fileScope", "customDirectoryPaths",
+                "panelPosition", "favorites"
+            ]
+        )
+        try assertEncodedKeys(of: settings.panelPosition, supersetOf: ["x", "y"])
+        try assertEncodedKeys(
+            of: settings.favorites.first,
+            supersetOf: ["identity", "path", "kind", "title", "subtitle", "bundleIdentifier", "addedAt"]
+        )
+    }
+
     @Test func sessionPolicyEncodesEveryHistoricalKey() throws {
         try assertEncodedKeys(
             of: SessionPolicy.standard,

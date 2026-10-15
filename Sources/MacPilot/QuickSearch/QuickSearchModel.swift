@@ -153,6 +153,19 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     /// 而不是只看有没有报错——注册失败却显示成正常启用是最糟的假状态。
     var isHotKeyRegistered: Bool { hotKeyCenter.isRegistered }
 
+    // MARK: 位置与收藏（设置的只读视图）
+
+    /// 记住的面板左上角。nil 表示用户没拖过（或已回到默认位置）。
+    var panelPosition: QuickSearchPanelPosition? { settings.panelPosition }
+
+    /// 收藏的归并键。视图据此画星标、决定右键菜单写「添加」还是「移除」。
+    /// 只有一份真实来源（`settings.favorites`），这里只是把判断做成集合。
+    var favoriteIdentities: Set<String> { Set(settings.favorites.map(\.identity)) }
+
+    func isFavorite(_ result: QuickSearchResult) -> Bool {
+        favoriteIdentities.contains(result.favoriteIdentity)
+    }
+
     /// 面板显示的行：应用在前、文件在后，合计不超过展示上界。
     /// 计算属性每次求值顺序一致，选中下标始终指向同一行。
     var results: [QuickSearchResult] {
@@ -210,7 +223,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         publishIndexState()
         guard presentation == .visible else { return }
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            showRecentApplications()
+            showFavoritesAndRecents()
         } else {
             runApplicationSearch()
         }
@@ -343,6 +356,41 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         indexState = inventory.state
     }
 
+    /// 拖动结束后记下左上角。位置没变就不写盘：AppKit 在一次拖布里可能连发多次
+    /// `windowDidMove`，每次都改设置会把配置文件刷成噪声。
+    func rememberPanelPosition(_ position: QuickSearchPanelPosition) {
+        guard position.isFinite, position != settings.panelPosition else { return }
+        settings.panelPosition = position
+        persist?()
+    }
+
+    /// 「回到默认位置」：清掉记录，面板立刻按默认落点重摆一次。
+    func resetPanelPosition() {
+        guard settings.panelPosition != nil else { return }
+        settings.panelPosition = nil
+        persist?()
+        panel?.applyPlacement()
+    }
+
+    /// 右键菜单的收藏开关。加满时挤掉最早钉住的那一条（规则在 `QuickSearchFavorites`）。
+    func toggleFavorite(_ result: QuickSearchResult) {
+        let identity = result.favoriteIdentity
+        if QuickSearchFavorites.contains(identity: identity, in: settings.favorites) {
+            settings.favorites = QuickSearchFavorites.remove(identity: identity, from: settings.favorites)
+        } else {
+            settings.favorites = QuickSearchFavorites.add(
+                QuickSearchFavorite(result: result),
+                to: settings.favorites,
+                limit: QuickSearchLimits.favorites
+            )
+        }
+        persist?()
+        // 空查询那一屏的首列就是收藏，增减之后要立刻重排，否则看着像没生效。
+        if presentation == .visible, query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showFavoritesAndRecents()
+        }
+    }
+
     // MARK: - 面板
 
     func togglePanel() {
@@ -360,7 +408,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         query = ""
         selectedRowIndex = 0
         fileSearchIssue = nil
-        showRecentApplications()
+        showFavoritesAndRecents()
         inventory.syncRunningState()
         inventory.refreshIfStale()
         publishIndexState()
@@ -410,7 +458,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
             fileQuery.cancelActiveQuery()
             fileResults = []
             searchPhase = .idle
-            showRecentApplications()
+            showFavoritesAndRecents()
             return
         }
         runApplicationSearch()
@@ -426,11 +474,20 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         )
     }
 
-    private func showRecentApplications() {
-        applicationResults = ApplicationSearchProvider.recentApplications(
+    private func showFavoritesAndRecents() {
+        let recents = ApplicationSearchProvider.recentApplications(
             entries: inventory.entries,
             recentIdentities: usage.recentIdentities(limit: QuickSearchLimits.recentApplications),
             limit: QuickSearchLimits.recentApplications
+        )
+        applicationResults = QuickSearchFavorites.rows(
+            favorites: QuickSearchFavorites.ordered(settings.favorites) {
+                usage.count(forIdentity: $0.identity)
+            },
+            entries: inventory.entries,
+            recent: recents,
+            favoriteLimit: QuickSearchLimits.favoritesOnEmptyQuery,
+            totalLimit: QuickSearchLimits.applicationResults
         )
         fileResults = []
     }
@@ -488,7 +545,14 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         guard generation == searchGeneration else { return }
         switch outcome {
         case .results(let hits, let isFinal, let issue):
-            fileResults = hits.prefix(QuickSearchLimits.visibleResults).map { QuickSearchResult(file: $0) }
+            // 先按打开次数提一遍再截断：Spotlight 排在第 60 位但天天开的文件，
+            // 不该因为它的默认次序被挤出这一屏。次数相同的保持 Spotlight 的顺序。
+            let ordered = QuickSearchFrequencyOrder.ordered(
+                hits.map { QuickSearchResult(file: $0) }
+            ) {
+                usage.count(forIdentity: $0.favoriteIdentity)
+            }
+            fileResults = Array(ordered.prefix(QuickSearchLimits.visibleResults))
             fileSearchIssue = issue
             searchPhase = isFinal ? .idle : .queryingSpotlight
         case .failed(let issue):
@@ -567,6 +631,12 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         case .file, .folder:
             if let failure = fileOpener.open(target.url) {
                 presentNotice(t(failure.messageKey, failure.argument))
+            } else {
+                // 文件也计入使用次数：下次搜同一个词时，打开过的排在前面。
+                usage.recordLaunch(
+                    identity: target.favoriteIdentity,
+                    path: target.url.standardizedFileURL.path
+                )
             }
         }
     }
@@ -597,10 +667,12 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     }
 
     private func recordUsage(of result: QuickSearchResult) {
-        guard let entry = inventory.entries.first(where: { $0.id == result.url.standardizedFileURL.path }) else {
-            return
-        }
-        usage.recordLaunch(of: entry)
+        // 用与收藏同一个归并键：应用按 Bundle ID、其余按路径，搜索来的行和收藏快照的行
+        // 因此记到同一条上，不会因为来源不同而分裂成两个计数。
+        usage.recordLaunch(
+            identity: result.favoriteIdentity,
+            path: result.url.standardizedFileURL.path
+        )
     }
 
     // MARK: - 错误提示

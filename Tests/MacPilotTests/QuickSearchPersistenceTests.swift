@@ -165,6 +165,60 @@ struct QuickSearchPersistenceTests {
         #expect(again.quickSearch.customDirectoryPaths == ["/Users/me/Documents/项目"])
     }
 
+    // MARK: 位置与收藏（新增字段）
+
+    @Test func aSectionWrittenBeforePositionAndFavoritesExistedStillLoads() throws {
+        var object = try Self.baseObject()
+        object["quickSearch"] = ["isEnabled": true, "fileScope": "home"]
+
+        let configuration = try Self.decode(object)
+
+        // 新字段缺失 = 老配置，按「没拖过、没收藏」处理，不能登记成读不出来。
+        #expect(configuration.quickSearch.panelPosition == nil)
+        #expect(configuration.quickSearch.favorites.isEmpty)
+        #expect(configuration.quickSearch.isEnabled)
+        #expect(configuration.unreadableSections.isEmpty)
+    }
+
+    @Test func rememberedPositionAndFavoritesRoundTripThroughTheSection() throws {
+        var settings = Self.customized
+        settings.panelPosition = QuickSearchPanelPosition(x: 180, y: 640)
+        settings.favorites = [
+            QuickSearchFavorite(
+                identity: "bid:com.test.a", path: "/Applications/A.app", kind: .application,
+                title: "A", subtitle: "/Applications", bundleIdentifier: "com.test.a",
+                addedAt: Date(timeIntervalSince1970: 1_700)
+            ),
+            QuickSearchFavorite(
+                identity: "path:/Users/me/报告.pdf", path: "/Users/me/报告.pdf", kind: .file,
+                title: "报告.pdf", subtitle: "/Users/me", addedAt: Date(timeIntervalSince1970: 1_800)
+            ),
+        ]
+        var object = try Self.baseObject()
+        object["quickSearch"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings))
+
+        let configuration = try Self.decode(object)
+
+        #expect(configuration.quickSearch == settings)
+        #expect(configuration.quickSearch.favorites.last?.kind == .file)
+        #expect(configuration.unreadableSections.isEmpty)
+    }
+
+    @Test func aFavoriteThatOnlyKnowsItsPathStillRendersARow() throws {
+        let data = Data(#"""
+        {"favorites":[{"path":"/Users/me/报告.pdf"}]}
+        """#.utf8)
+
+        let settings = try JSONDecoder().decode(QuickSearchSettings.self, from: data)
+        let favorite = try #require(settings.favorites.first)
+
+        // 缺字段逐键回落：名称取自路径、类型当文件、归并键按路径重算。
+        #expect(favorite.title == "报告.pdf")
+        #expect(favorite.kind == .file)
+        #expect(favorite.identity == "path:/Users/me/报告.pdf")
+        #expect(settings.isEnabled == false)
+    }
+
     // MARK: 分文件落盘
 
     @Test func theStoreSplitsQuickSearchSettingsAndItsHotkeyAcrossFiles() throws {

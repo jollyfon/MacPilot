@@ -28,7 +28,8 @@ enum QuickSearchPanelLayout {
     static let preferredVisibleRows = 9
     static let searchFieldHeight: CGFloat = 46
     static let footerHeight: CGFloat = 34
-    static let headerHeight: CGFloat = 30
+    /// 顶栏抓手条：只用来拖动，不做标题。
+    static let headerHeight: CGFloat = 22
 }
 
 // MARK: - 按键分流
@@ -40,6 +41,8 @@ protocol QuickSearchPanelPresenting: AnyObject {
     var isPresented: Bool { get }
     func open()
     func close()
+    /// 位置变了（用户拖动过、或回到默认位置）之后按当前设置重新落一次。
+    func applyPlacement()
 }
 
 /// 一次按键应该做什么。纯函数，可脱离真实窗口验证——输入法那条规则必须能被测试覆盖。
@@ -96,7 +99,10 @@ enum QuickSearchKeyRouter {
 // MARK: - 面板
 
 /// 不抢占前台应用焦点的搜索面板：呼出即可输入，点到别处自动收起。
-final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
+///
+/// 位置是用户拖动出来的：面板可以拖（顶栏上的抓手），拖完记住，下次呼出回到同一处；
+/// 「回到默认位置」清掉记录即可。与 `ClipboardPanel` 一套做法。
+final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDelegate {
     private(set) var isPresented = false
     private let onClose: () -> Void
     private weak var model: QuickSearchModel?
@@ -104,6 +110,8 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
     private let hostingView: NSHostingView<QuickSearchPanelContent>
     private var pendingResignClose: DispatchWorkItem?
     private(set) var isHandlingComposedKey = false
+    private var pendingPositionSave: DispatchWorkItem?
+    private var isDraggingFromHeader = false
 
     init(model: QuickSearchModel, onClose: @escaping () -> Void) {
         self.model = model
@@ -127,7 +135,9 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
         hasShadow = true
         animationBehavior = .none
         hidesOnDeactivate = false
-        isMovable = false
+        // 只有抓手会主动发起拖动；开着 isMovable 是为了让 AppKit 认这条拖动路径。
+        isMovable = true
+        delegate = self
         contentView = hostingView
     }
 
@@ -170,12 +180,13 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
         pendingResignClose?.cancel()
         pendingResignClose = nil
         isPresented = true
-        positionOnScreen()
+        applyPlacement()
         orderFrontRegardless()
         makeKey()
     }
 
     override func close() {
+        finishHeaderDrag()
         pendingResignClose?.cancel()
         pendingResignClose = nil
         isPresented = false
@@ -197,29 +208,56 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
     }
 
-    // MARK: 多显示器定位
+    // MARK: 落点与拖动
 
-    private func positionOnScreen() {
-        let screen = screenForPointer()
-        let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
-        let width = max(
-            QuickSearchPanelLayout.minimumWidth,
-            min(QuickSearchPanelLayout.defaultWidth, visibleFrame.width - 80)
+    /// 按当前设置落一次：有记住的位置就原样放回，没有就用默认落点。
+    /// 结果行数变了也要重算——面板高度跟着行数走，锚点固定在左上角。
+    func applyPlacement() {
+        let preferred = screenForPointer()
+        let visibleFrames = NSScreen.screens.map(\.visibleFrame)
+        let next = QuickSearchPanelLayout.positionedFrame(
+            rowCount: model?.results.count ?? 0,
+            savedPosition: model?.panelPosition,
+            visibleFrames: visibleFrames,
+            preferredFrame: preferred?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
         )
-        let rowCount = min(
-            CGFloat(model?.results.count ?? 0),
-            CGFloat(QuickSearchPanelLayout.preferredVisibleRows)
-        )
-        let contentHeight = QuickSearchPanelLayout.searchFieldHeight
-            + rowCount * QuickSearchPanelLayout.rowHeight
-            + (rowCount > 0 ? 20 : 120)   // 结果区留白；无结果时给状态文案留出空间
-            + QuickSearchPanelLayout.footerHeight
-        let height = min(max(contentHeight, 180), visibleFrame.height - 80)
-        setContentSize(NSSize(width: width, height: height))
-        let x = visibleFrame.midX - width / 2
-        // 放在指针所在屏幕的上三分之一处，和系统聚焦类面板的习惯一致。
-        let y = min(visibleFrame.maxY - height - 96, visibleFrame.maxY - visibleFrame.height * 0.45)
-        setFrameOrigin(NSPoint(x: x, y: max(y, visibleFrame.minY + 40)))
+        setContentSize(next.size)
+        setFrame(next, display: isPresented, animate: false)
+    }
+
+    /// 顶栏抓手发起的拖动。松手之后才写位置：WindowServer 接管这段拖动，
+    /// mouseUp 不保证回到视图，所以改成轮询按键状态。
+    func dragFromHeader(with event: NSEvent) {
+        isDraggingFromHeader = true
+        performDrag(with: event)
+        schedulePositionSave()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard isDraggingFromHeader else { return }
+        schedulePositionSave()
+    }
+
+    private func schedulePositionSave() {
+        pendingPositionSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isDraggingFromHeader else { return }
+            if NSEvent.pressedMouseButtons & 1 != 0 {
+                self.schedulePositionSave()
+            } else {
+                self.finishHeaderDrag()
+            }
+        }
+        pendingPositionSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func finishHeaderDrag() {
+        pendingPositionSave?.cancel()
+        pendingPositionSave = nil
+        guard isDraggingFromHeader else { return }
+        isDraggingFromHeader = false
+        model?.rememberPanelPosition(QuickSearchPanelPosition(frame: frame))
     }
 
     /// 用指针位置选屏，而不是「主屏」：多显示器下呼出应该出现在手边。

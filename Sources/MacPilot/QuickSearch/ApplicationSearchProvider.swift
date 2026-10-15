@@ -33,7 +33,7 @@ enum ApplicationSearchProvider {
             )
         }
         return QuickSearchRanking.rank(candidates, limit: limit).map {
-            QuickSearchResult(entry: $0.value)
+            QuickSearchResult(application: $0.value)
         }
     }
 
@@ -53,7 +53,7 @@ enum ApplicationSearchProvider {
             if let entry = index[identity] { picked.append(entry) }
             if picked.count >= max(0, limit) { break }
         }
-        return picked.map { QuickSearchResult(entry: $0) }
+        return picked.map { QuickSearchResult(application: $0) }
     }
 }
 
@@ -61,17 +61,5 @@ extension QuickSearchApplicationEntry {
     /// 与 `QuickSearchUsageStore` 一致的归并键。
     var usageIdentity: String {
         QuickSearchUsageStore.identity(bundleIdentifier: bundleIdentifier, path: path)
-    }
-}
-
-private extension QuickSearchResult {
-    init(entry: QuickSearchApplicationEntry) {
-        self.init(
-            kind: .application,
-            title: entry.name,
-            subtitle: entry.directoryDisplayName,
-            url: entry.url,
-            bundleIdentifier: entry.bundleIdentifier
-        )
     }
 }

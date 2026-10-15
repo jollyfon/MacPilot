@@ -26,6 +26,7 @@ struct QuickSearchSettingsView: View {
                 }
 
                 runtimeCard
+                panelCard
                 hotkeyCard
                 fileScopeCard
             }
@@ -78,6 +79,44 @@ struct QuickSearchSettingsView: View {
 
             if let issue = quickSearch.fileSearchIssue {
                 InlineHint(text: model.t(issue.messageKey))
+            }
+        }
+    }
+
+    // MARK: 面板位置与收藏
+
+    private var panelCard: some View {
+        SettingsCard {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(model.t("quickSearchPanelPositionTitle"))
+                        .font(.subheadline.weight(.medium))
+                    Text(model.t("quickSearchDragHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                Button(model.t("quickSearchResetPosition")) {
+                    quickSearch.resetPanelPosition()
+                }
+                // 没拖过就没有「记住的位置」可清，按钮这时候说出来的是假可点。
+                .disabled(quickSearch.panelPosition == nil)
+            }
+
+            Divider()
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(model.t("quickSearchFavoritesTitle"))
+                        .font(.subheadline.weight(.medium))
+                    Text(model.t("quickSearchEmptyHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                Text(model.t("quickSearchFavoriteCount", quickSearch.settings.favorites.count))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
         }
     }

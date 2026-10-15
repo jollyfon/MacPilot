@@ -163,7 +163,7 @@ struct QuickSearchMatchingTests {
         #expect(searched("sh", among: entries).isEmpty)
     }
 
-    @Test func prefersTheMoreFrequentlyUsedAppWithinTheSameMatchTier() {
+    @Test func ordersSameNameCandidatesByHowOftenTheyWereOpened() {
         let a = makeEntry("Mail", at: "/Applications/A.app", bundleID: "com.test.a")
         let b = makeEntry("Mail", at: "/Applications/B.app", bundleID: "com.test.b")
         let usage: (QuickSearchApplicationEntry) -> Int = { $0.path == "/Applications/B.app" ? 9 : 1 }
@@ -171,6 +171,33 @@ struct QuickSearchMatchingTests {
         #expect(searched("mail", among: [a, b], usage: usage) == ["Mail", "Mail"])
         let ranked = ApplicationSearchProvider.search(query: "mail", entries: [a, b], usage: usage, limit: 20)
         #expect(ranked.first?.url.path == "/Applications/B.app")
+    }
+
+    @Test func aFrequentlyOpenedAppOutranksANeverUsedExactMatch() {
+        // 「按使用频率排序」是首要依据：搜 abc 时天天开的 AB Converter 排在
+        // 一次没开过的 Abc 前面。次数相同（含都为 0）才回头比名字匹配得多好。
+        let exact = makeEntry("Abc", at: "/Applications/Exact.app", bundleID: "com.test.exact")
+        let opened = makeEntry("AB Converter", at: "/Applications/Open.app", bundleID: "com.test.open")
+        let usage: (QuickSearchApplicationEntry) -> Int = { $0.path == "/Applications/Open.app" ? 40 : 0 }
+
+        let ranked = ApplicationSearchProvider.search(query: "abc", entries: [exact, opened], usage: usage, limit: 20)
+        #expect(ranked.map(\.title) == ["AB Converter", "Abc"])
+
+        // 都没开过 → 回到匹配程度：全名相同的在前。
+        let cold = ApplicationSearchProvider.search(query: "abc", entries: [exact, opened], limit: 20)
+        #expect(cold.map(\.title) == ["Abc", "AB Converter"])
+    }
+
+    @Test func openedFilesRiseToTheTopButOtherwiseKeepSpotlightsOrder() {
+        // 文件行没有名称分级可比，Spotlight 回来的次序就是它的判断。
+        // 这里只把「打开过」的提上来，次数相同的维持原序，谁也不去重排 Spotlight。
+        let rows = ["/Users/me/a.pdf", "/Users/me/b.pdf", "/Users/me/c.pdf", "/Users/me/d.pdf"].map {
+            QuickSearchResult(kind: .file, title: ($0 as NSString).lastPathComponent, subtitle: "/Users/me", url: URL(fileURLWithPath: $0))
+        }
+        let counts: [String: Int] = ["path:/Users/me/b.pdf": 3, "path:/Users/me/c.pdf": 3]
+
+        let ordered = QuickSearchFrequencyOrder.ordered(rows) { counts[$0.favoriteIdentity] ?? 0 }
+        #expect(ordered.map(\.title) == ["b.pdf", "c.pdf", "a.pdf", "d.pdf"])
     }
 
     @Test func breaksTiesByNameThenPathSoTheOrderIsStable() {

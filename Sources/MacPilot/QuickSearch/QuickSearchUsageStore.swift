@@ -19,7 +19,8 @@ struct QuickSearchUsageRecord: Codable, Equatable, Sendable {
 @MainActor
 final class QuickSearchUsageStore {
     /// 记录条数上限。超出时按最近使用时间丢弃最旧的，不让它无限增长。
-    static let defaultLimit = 100
+    /// 应用和文件现在共用这一张表，所以容量按两类都记得下估算。
+    static let defaultLimit = 200
     static let defaultsKey = "quickSearch.appUsage"
 
     private let defaults: UserDefaults
@@ -40,7 +41,12 @@ final class QuickSearchUsageStore {
     }
 
     func count(for entry: QuickSearchApplicationEntry) -> Int {
-        records[Self.identity(bundleIdentifier: entry.bundleIdentifier, path: entry.path)]?.count ?? 0
+        count(forIdentity: entry.usageIdentity)
+    }
+
+    /// 按归并键取次数。收藏与文件结果只有路径，也走这同一个入口。
+    func count(forIdentity identity: String) -> Int {
+        records[identity]?.count ?? 0
     }
 
     func lastUsed(for entry: QuickSearchApplicationEntry) -> Date? {
@@ -48,11 +54,19 @@ final class QuickSearchUsageStore {
     }
 
     func recordLaunch(of entry: QuickSearchApplicationEntry) {
-        let identity = Self.identity(bundleIdentifier: entry.bundleIdentifier, path: entry.path)
+        recordLaunch(
+            identity: Self.identity(bundleIdentifier: entry.bundleIdentifier, path: entry.path),
+            path: entry.path
+        )
+    }
+
+    /// 记录一次「真的打开了」。文件与文件夹用同一条键（`path:`），
+    /// 所以按使用频率排序时应用和文件是一个尺子。
+    func recordLaunch(identity: String, path: String) {
         let existing = records[identity]
         records[identity] = QuickSearchUsageRecord(
             identity: identity,
-            path: entry.path,
+            path: path,
             count: (existing?.count ?? 0) + 1,
             lastUsed: Date()
         )
