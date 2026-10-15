@@ -189,3 +189,14 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - **状态读回**：`asc status --app 6811335132` → `testflight.betaReviewState=WAITING_FOR_REVIEW`、`submittedDate=2026-10-13T07:08:30-07:00`；`appstore.state` 仍是 `PREPARE_FOR_SUBMISSION`，`submission.inFlight=false`。`WAITING_FOR_REVIEW` 只代表排队，**不代表 Apple 已批准**。
 - **未做**：未提交 App Store Review、未新增测试员、未把构建 39 附加到 1.2.3 版本对象、未改签名或 provisioning 设置（本轮 automatic export 正常，无需回到构建 27–34 的手工导出路径）。
 - **装机分布拿不到**：`asc testflight metrics group-testers` 对内部组与外部组都返回 `attributes:null`，`client hello` 日志也不带手机端构建号，因此**无法从服务端证明用户手机上装的是 build 38 还是 39**。要确认只能在手机 TestFlight 上看 `1.2.3 (39)`。真机画面（默认关闭、入口出现、iPad 实际成为扩展显示）仍未实测。
+
+## 2026-10-15：1.2.3 / 构建 39 提交 App Store Review
+
+用户指令「IOS版发布新版本提交审核」授权本轮提交，本节补上上一节遗留的「未提交 App Store Review」。
+
+- **前置读回**：`asc versions list --app 6811335132` → 1.2.3 `PREPARE_FOR_SUBMISSION`（train 可编辑），1.2.2/1.2.1/1.2.0 `READY_FOR_DISTRIBUTION`。两条本地化（zh-Hans `74866d93-b0a9-4d09-bd74-a7b674d06bd0`、en-US `858a24d8-4daf-435d-a73e-68e3a8a24091`）的 `whatsNew` 已在 2026-10-13 推送，与仓库 canonical `metadata/version/1.2.3/*.json` 一致，本轮无需再 push。
+- **截图审计与一次自纠错**：四个截图集（zh-Hans/en-US × `APP_IPAD_PRO_3GEN_129`/`APP_IPHONE_67`）本来各已有 3 张与线上 1.2.2 `sourceFileChecksum` 完全一致的截图（如 zh iPad `b986716382bc`/`b01fc8e302a8`/`cfa5445cc28b`），本无需补传。此前把 `asc screenshots list` JSON 的顶层 key 误当作 `data`（真实 key 是 `sets`），解析出「0 个 set」，基于这个假前提从线上 1.2.2 下载并多传了 12 张重复截图（每集 6 张）。发现后逐一 `asc screenshots delete --id <asset-id> --confirm` 删除，复查四集恢复为每集 3 张、`assetDeliveryState.state=COMPLETE`、`sourceFileChecksum` 与线上 1.2.2 相同。教训：解析 ASC JSON 前先看原始输出结构；「缺截图」这类阻塞性结论必须用原始 response 复核一遍。
+- **提交 dry-run**：`asc review submit --app 6811335132 --version-id 62c45e31-2b58-42f6-b173-eb0ab45e5ee8 --build 18474352-73f7-428f-8f1e-9a1e481df94d --dry-run` → `wouldAttach=true`、`wouldSubmit=true`、无错误。
+- **正式提交与两次服务端报错**：`--confirm` 在最后一步 PATCH 报 `context deadline exceeded`；复查发现构建已挂上、reviewSubmission `633caf40-d35b-4a5c-8939-3c6316dd191f` 已创建为 `READY_FOR_REVIEW`（attach-build 与 items-add 已生效，只差最后一步 submit）。补跑 `asc review submissions-submit --id 633caf40-d35b-4a5c-8939-3c6316dd191f --confirm` 返回 HTTP 500，再次读回却显示提交已生效——**ASC 的超时/500 不能用来判断操作是否生效，唯一依据是读回状态；也不能因报错盲目重试**，两次报错都发生在服务端已经应用之后。
+- **最终读回（提交成功的证据）**：版本 1.2.3 `state=WAITING_FOR_REVIEW`；reviewSubmission `633caf40-d35b-4a5c-8939-3c6316dd191f` `state=WAITING_FOR_REVIEW`、`submittedDate=2026-10-15T14:13:03.13Z`；`asc builds links view --build-id 18474352-73f7-428f-8f1e-9a1e481df94d --type appStoreVersion` → `62c45e31-...`，证明挂载的就是构建 39；`nextAction=Wait for App Store review outcome`。`WAITING_FOR_REVIEW` 只代表已排队，**不代表 Apple 已批准**。
+- **未做**：未改签名/provisioning/export 设置；未新增测试员；未动已发布的 tag。真机画面（默认关闭、开启后入口出现、iPad 实际随航）仍未实测。
