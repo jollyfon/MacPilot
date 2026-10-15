@@ -146,6 +146,12 @@ Everything persisted under `StoredConfiguration` (`config.json` + sidecar files)
 - Multi-display selection tests must reach `SnapzyAreaSelectionController` and `FrozenAreaCaptureSession`, not only legacy crop helpers. Inject presentation/cursor effects so test windows stay hidden. A passing direct-handler test does not establish that WindowServer's real pointer-event routing is correct.
 - Smart-element resolvers return screen coordinates; overlay selection delegates accept view-local coordinates. Convert exactly once at each boundary, including content-view insets. Cover recognized-element single clicks as well as manual/smart drags on a nonzero-origin display.
 
+## Pinned screenshot hover (invariant)
+
+- A pin may only react to the pointer when it owns the pixel the pointer is on. Menus, combobox dropdowns and tooltips draw above the pin's `floating + 2` level; reacting to a geometric frame hit instead made the pin take key window status and closed another app's popup, so an item overlapping a pin could never be clicked. Use `QuickAccessPinHoverCoverage`; a short or empty window-server sweep answers "exposed", never "covered".
+- The coverage verdict costs a `CGWindowListCopyWindowInfo` walk, so it stays edge-triggered plus interval-throttled through `sweepIsWorthRunning` — an exposed, already-key pin must run zero sweeps. Do not move that call into every pointer event, and keep coordinate conversion hoisted (one main-display height, one subtraction): per-window `DisplayMapping` rebuilds are far too expensive on this path.
+- A locked pin keeps geometric mouse passthrough: it never takes key status and shows no hover chrome, so a cover must not change whether clicks reach it.
+
 ## Project Summary
 
 The repo-root `SUMMARY.md` is the project's Chinese development summary (features, release flow, pitfalls). Consult it for fuller context beyond this contributor guide.
