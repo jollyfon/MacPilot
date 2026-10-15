@@ -49,6 +49,24 @@ enum QuickSearchLimits {
     static let minimumFileQueryCharacters = 2
 }
 
+/// 匹配范围：只认名字，还是名字之外也认应用自己声明的用途标签。
+///
+/// 默认带上用途：输入「图片」「下载」能捞到名字里没这两个词的软件，
+/// 而名称命中的排序完全不受影响（标签命中排在所有名称命中之后）。
+/// 不想要这层的人可以只留名称。
+enum QuickSearchMatchScope: String, Codable, Equatable, CaseIterable, Identifiable, Sendable {
+    case nameOnly
+    case nameAndPurpose
+
+    var id: String { rawValue }
+    var titleKey: String {
+        switch self {
+        case .nameOnly: "quickSearchMatchNameOnly"
+        case .nameAndPurpose: "quickSearchMatchNameAndPurpose"
+        }
+    }
+}
+
 struct QuickSearchSettings: Codable, Equatable, Sendable {
     /// 功能总开关。首页是唯一入口，这里只是运行时镜像（见 AGENTS.md）。
     var isEnabled: Bool
@@ -62,6 +80,8 @@ struct QuickSearchSettings: Codable, Equatable, Sendable {
     var panelPosition: QuickSearchPanelPosition?
     /// 用户钉住的收藏，空查询时排在最前。
     var favorites: [QuickSearchFavorite]
+    /// 只匹配名称，还是也匹配用途标签。
+    var matchScope: QuickSearchMatchScope
 
     static let defaultHotkey = SmartCaptureShortcutBinding(
         keyCode: UInt16(kVK_Space),
@@ -74,7 +94,8 @@ struct QuickSearchSettings: Codable, Equatable, Sendable {
         fileScope: QuickSearchFileScope = .home,
         customDirectoryPaths: [String] = [],
         panelPosition: QuickSearchPanelPosition? = nil,
-        favorites: [QuickSearchFavorite] = []
+        favorites: [QuickSearchFavorite] = [],
+        matchScope: QuickSearchMatchScope = .nameAndPurpose
     ) {
         self.isEnabled = isEnabled
         self.hotkey = hotkey
@@ -84,14 +105,18 @@ struct QuickSearchSettings: Codable, Equatable, Sendable {
         })).sorted()
         self.panelPosition = panelPosition
         self.favorites = favorites
+        self.matchScope = matchScope
     }
 
     var customDirectoryURLs: [URL] {
         customDirectoryPaths.map { URL(fileURLWithPath: $0) }
     }
 
+    /// 名称之外还认不认用途标签。
+    var matchesPurposeTags: Bool { matchScope == .nameAndPurpose }
+
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, hotkey, fileScope, customDirectoryPaths, panelPosition, favorites
+        case isEnabled, hotkey, fileScope, customDirectoryPaths, panelPosition, favorites, matchScope
     }
 
     /// 逐键 `decodeIfPresent`：以后新增字段时旧配置仍可加载（AGENTS.md 不变量）。
@@ -108,5 +133,14 @@ struct QuickSearchSettings: Codable, Equatable, Sendable {
         // 落盘的必然是有限值，读侧逐键补齐即可。
         panelPosition = try container.decodeIfPresent(QuickSearchPanelPosition.self, forKey: .panelPosition)
         favorites = try container.decodeIfPresent([QuickSearchFavorite].self, forKey: .favorites) ?? []
+        // 认不出来的档位（比如用户装过更新的一版再降回来）只影响这一个选择，
+        // 不能把收藏、面板位置、快捷键一起带走——那些是 `decodeIfPresent` 存在的理由。
+        // 键不存在与值不认识都落到 `else`：`try?` 把抛错折成 nil，
+        // `decodeIfPresent` 本身已经把「没有这个键」变成 nil。
+        if let stored = try? container.decodeIfPresent(QuickSearchMatchScope.self, forKey: .matchScope) {
+            matchScope = stored
+        } else {
+            matchScope = .nameAndPurpose
+        }
     }
 }

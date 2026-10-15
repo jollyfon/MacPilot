@@ -10,10 +10,13 @@ import Foundation
 
 enum ApplicationSearchProvider {
     /// 搜索应用。`usage` 是同目录下的使用次数查询，用于同级匹配的先后。
+    /// `includeTags` 打开后，名称完全没对上的应用还能按用途标签命中，
+    /// 排在所有名称命中之后。
     static func search(
         query: String,
         entries: [QuickSearchApplicationEntry],
         usage: (QuickSearchApplicationEntry) -> Int = { _ in 0 },
+        includeTags: Bool,
         limit: Int
     ) -> [QuickSearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -21,7 +24,7 @@ enum ApplicationSearchProvider {
         var candidates: [QuickSearchRankedResult<QuickSearchApplicationEntry>] = []
         candidates.reserveCapacity(entries.count)
         for entry in entries {
-            guard let match = QuickSearchMatcher.match(query: trimmed, fields: entry.fields) else { continue }
+            guard let match = QuickSearchMatcher.match(query: trimmed, fields: entry.fields, includeTags: includeTags) else { continue }
             candidates.append(
                 QuickSearchRankedResult(
                     value: entry,
@@ -33,7 +36,7 @@ enum ApplicationSearchProvider {
             )
         }
         return QuickSearchRanking.rank(candidates, limit: limit).map {
-            QuickSearchResult(application: $0.value)
+            QuickSearchResult(application: $0.value, matchedTagTerms: $0.match.matchedTags)
         }
     }
 

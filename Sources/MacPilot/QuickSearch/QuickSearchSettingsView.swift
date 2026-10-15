@@ -28,6 +28,7 @@ struct QuickSearchSettingsView: View {
                 runtimeCard
                 panelCard
                 hotkeyCard
+                matchScopeCard
                 fileScopeCard
             }
             .padding(.horizontal, 36)
@@ -157,6 +158,31 @@ struct QuickSearchSettingsView: View {
             return model.t(error.messageKey, status)
         case .conflictsWithOtherFeature(let conflictingTitleKey):
             return model.t(error.messageKey, model.t(conflictingTitleKey))
+        }
+    }
+
+    // MARK: 匹配范围
+
+    private var matchScopeCard: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(model.t("quickSearchMatchScopeTitle"))
+                    .font(.subheadline.weight(.medium))
+                Picker(model.t("quickSearchMatchScopeTitle"), selection: Binding(
+                    get: { quickSearch.settings.matchScope },
+                    set: { quickSearch.setMatchScope($0) }
+                )) {
+                    ForEach(QuickSearchMatchScope.allCases) { scope in
+                        Text(model.t(scope.titleKey)).tag(scope)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                Text(model.t("quickSearchMatchScopeHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

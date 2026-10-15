@@ -158,7 +158,10 @@ struct QuickSearchPanelContent: View {
                                 isSelected: index == model.selectedRowIndex,
                                 isFavorite: model.favoriteIdentities.contains(result.favoriteIdentity),
                                 favoriteLabel: favoriteLabel,
-                                categoryLabel: model.t(result.categoryKey)
+                                categoryLabel: model.t(result.categoryKey),
+                                // 用途命中没有名称上的理由可说，就把命中的标签放到
+                                // 本来表示类别的那枚标签上：这一条为什么出现，一眼看得见。
+                                purposeLabel: result.matchedTagTerms.first
                             ) {
                                 model.selectRow(at: index)
                             } onActivate: {
@@ -283,6 +286,8 @@ private struct QuickSearchResultRow: View {
     let isFavorite: Bool
     let favoriteLabel: String
     let categoryLabel: String
+    /// 用途标签命中时显示在类别位置上的词（「下载」「图片」）；名称命中为 nil。
+    let purposeLabel: String?
     let onSelect: () -> Void
     let onActivate: () -> Void
 
@@ -310,7 +315,7 @@ private struct QuickSearchResultRow: View {
                         .foregroundStyle(Color(nsColor: .systemYellow))
                         .accessibilityLabel(favoriteLabel)
                 }
-                Text(categoryLabel)
+                Text(purposeLabel ?? categoryLabel)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(isSelected ? Color(nsColor: .controlAccentColor) : Color.secondary.opacity(0.7))
                     .padding(.horizontal, 6)

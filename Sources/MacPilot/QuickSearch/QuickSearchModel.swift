@@ -327,6 +327,15 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         persist?()
     }
 
+    /// 匹配范围改完立刻重出当前这屏：还得删一个字才生效的话，用户会以为开关没起作用。
+    func setMatchScope(_ scope: QuickSearchMatchScope) {
+        guard settings.matchScope != scope else { return }
+        settings.matchScope = scope
+        persist?()
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        runApplicationSearch()
+    }
+
     func addCustomDirectory(path: String) {
         let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
         guard !standardized.isEmpty, !settings.customDirectoryPaths.contains(standardized) else { return }
@@ -470,6 +479,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
             query: query,
             entries: inventory.entries,
             usage: { [weak self] entry in self?.usage.count(for: entry) ?? 0 },
+            includeTags: settings.matchesPurposeTags,
             limit: QuickSearchLimits.applicationResults
         )
     }

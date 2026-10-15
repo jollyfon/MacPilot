@@ -2,8 +2,8 @@
 //  ApplicationInventory.swift
 //  MacPilot
 //
-//  应用清单：在后台把已安装的 .app 收成一份轻量元数据索引（名称、路径、
-//  Bundle ID、拼音等搜索字段），磁盘枚举与 Info.plist 读取都不在主线程。
+//  应用清单：在后台把已安装的 .app 收成一份轻量元数据索引（名称与它的别称、路径、
+//  Bundle ID、拼音、用途标签等搜索字段），磁盘枚举与 Info.plist 读取都不在主线程。
 //  这里没有定时扫描——面板打开时按过期状态补一次，其余时间零开销。
 //
 
@@ -24,16 +24,25 @@ struct QuickSearchApplicationEntry: Sendable, Equatable {
     let directoryDisplayName: String
     let url: URL
 
-    init(url: URL, name: String, bundleIdentifier: String?) {
+    init(
+        url: URL,
+        name: String,
+        bundleIdentifier: String?,
+        alternateNames: [String] = [],
+        tags: [String] = []
+    ) {
         let standardized = url.standardizedFileURL
         self.url = standardized
         self.path = standardized.path
         self.id = standardized.path
         self.name = name
         self.bundleIdentifier = bundleIdentifier
-        self.fields = QuickSearchSearchFields(title: name)
+        self.fields = QuickSearchSearchFields(title: name, alternateTitles: alternateNames, tags: tags)
         self.directoryDisplayName = standardized.deletingLastPathComponent().lastPathComponent
     }
+
+    /// 用途标签的原样形式，行上解释命中原因时用。
+    var displayTags: [String] { fields.tags.map(\.display) }
 }
 
 /// 运行中的应用，用于把只装在非默认目录的应用补进索引。
@@ -247,15 +256,23 @@ final class ApplicationInventory: ObservableObject {
     /// 复用 Dock Groups 的只读扫描：浅层目录枚举 + Bundle 名称/ID 读取，
     /// 不复制、不移动、不修改任何应用。
     ///
+    /// 之后为每个应用再读一次 `Contents/Info.plist`，拿用途声明（分类、URL 方案、
+    /// 文档类型）和未本地化的名字。这仍然只在那条已经扫到的路径上做一次 `Data`
+    /// 读取，不新增目录遍历，而且整段都在后台线程。
+    ///
     /// 直接用扫到的路径，**不**再按 Bundle ID 向 Launch Services 解析——
     /// 那样会把同一个 Bundle ID 的不同安装路径折叠成一条。
     nonisolated static func scanInstalledEntries(in directories: [URL]) -> [QuickSearchApplicationEntry] {
         InstalledAppResolver.scanInstalledApps(in: directories).compactMap { reference in
             guard !reference.path.isEmpty else { return nil }
+            let url = URL(fileURLWithPath: reference.path, isDirectory: true)
+            let info = QuickSearchAppInfoReader.read(fromAppAt: url)
             return QuickSearchApplicationEntry(
-                url: URL(fileURLWithPath: reference.path, isDirectory: true),
+                url: url,
                 name: reference.name,
-                bundleIdentifier: reference.bundleIdentifier
+                bundleIdentifier: reference.bundleIdentifier,
+                alternateNames: info.alternateNames,
+                tags: QuickSearchAppTagger.tags(for: info.metadata)
             )
         }
     }

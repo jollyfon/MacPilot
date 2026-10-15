@@ -99,7 +99,7 @@ struct ConfigurationSchemaContractTests {
             of: settings,
             supersetOf: [
                 "isEnabled", "hotkey", "fileScope", "customDirectoryPaths",
-                "panelPosition", "favorites"
+                "panelPosition", "favorites", "matchScope"
             ]
         )
         try assertEncodedKeys(of: settings.panelPosition, supersetOf: ["x", "y"])

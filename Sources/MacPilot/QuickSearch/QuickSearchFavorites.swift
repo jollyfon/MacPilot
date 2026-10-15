@@ -174,13 +174,14 @@ extension QuickSearchResult {
 }
 
 extension QuickSearchResult {
-    init(application entry: QuickSearchApplicationEntry) {
+    init(application entry: QuickSearchApplicationEntry, matchedTagTerms: [String] = []) {
         self.init(
             kind: .application,
             title: entry.name,
             subtitle: entry.directoryDisplayName,
             url: entry.url,
-            bundleIdentifier: entry.bundleIdentifier
+            bundleIdentifier: entry.bundleIdentifier,
+            matchedTagTerms: matchedTagTerms
         )
     }
 }

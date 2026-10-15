@@ -28,6 +28,9 @@ struct QuickSearchResult: Identifiable, Hashable, Sendable {
     /// Spotlight 给出的内容类型标识符（`public.pdf` 之类），应用为 nil。
     let contentTypeIdentifier: String?
     let modificationDate: Date?
+    /// 靠用途标签命中时命中的标签（「下载」「图片」）。名称命中的结果是空数组，
+    /// 面板据此在行上说明这一条为什么会出现在这里。
+    let matchedTagTerms: [String]
 
     var isFolder: Bool { kind == .folder }
 
@@ -45,7 +48,8 @@ struct QuickSearchResult: Identifiable, Hashable, Sendable {
         url: URL,
         bundleIdentifier: String? = nil,
         contentTypeIdentifier: String? = nil,
-        modificationDate: Date? = nil
+        modificationDate: Date? = nil,
+        matchedTagTerms: [String] = []
     ) {
         self.id = "\(kind.rawValue):\(url.standardizedFileURL.path)"
         self.kind = kind
@@ -55,6 +59,7 @@ struct QuickSearchResult: Identifiable, Hashable, Sendable {
         self.bundleIdentifier = bundleIdentifier
         self.contentTypeIdentifier = contentTypeIdentifier
         self.modificationDate = modificationDate
+        self.matchedTagTerms = matchedTagTerms
     }
 
     init(file fileHit: QuickSearchFileHit) {

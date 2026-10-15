@@ -6,13 +6,16 @@
 //  拼音在**建索引时**算一次存进搜索字段，输入时不再重复转换；
 //  模糊匹配只用子序列，不做全量编辑距离。
 //
+//  可搜索形式有两种：应用的各个名称（含未本地化的包名），以及开关打开后的
+//  用途标签。名称永远排在标签之前。
+//
 
 import Foundation
 
 // MARK: - 搜索字段
 
-/// 一条可搜索名称在索引阶段算好的归一化形式。
-struct QuickSearchSearchFields: Sendable, Equatable {
+/// 一个名字在索引阶段算好的归一化形式。
+struct QuickSearchNameFields: Sendable, Equatable {
     /// 小写、去音调后的完整名称。
     let foldedTitle: String
     /// 按空白切出的词，同样已折叠。
@@ -31,6 +34,45 @@ struct QuickSearchSearchFields: Sendable, Equatable {
         pinyinFull = variants.full
         pinyinInitials = variants.initials
     }
+}
+
+/// 一个用途标签：折叠形式用来比对，原样用来在行上解释「为什么出现这一条」。
+struct QuickSearchTagTerm: Sendable, Equatable {
+    let display: String
+    let folded: String
+
+    init(_ display: String) {
+        self.display = display
+        self.folded = QuickSearchTextNormalizer.fold(display)
+    }
+}
+
+/// 一条结果在索引阶段算好的全部可搜索形式：名称的各个叫法 + 用途标签。
+struct QuickSearchSearchFields: Sendable, Equatable {
+    /// 名称字段，第一个就是列表里显示的那个。同一个应用往往有两个名字：Finder
+    /// 显示的是本地化过的（迅雷），`Info.plist` 里还写着未本地化的（Thunder）。
+    /// 只索引其中一个，用户按另一个叫法就搜不到。
+    let names: [QuickSearchNameFields]
+    /// 用途标签。空数组表示这个应用什么标签都没有——不代表它没有用途，
+    /// 只是厂商没在 `Info.plist` 里声明过，我们不猜。
+    let tags: [QuickSearchTagTerm]
+
+    init(title: String, alternateTitles: [String] = [], tags: [String] = []) {
+        var built: [QuickSearchNameFields] = []
+        var seen = Set<String>()
+        for candidate in [title] + alternateTitles {
+            let fields = QuickSearchNameFields(title: candidate)
+            guard !fields.foldedTitle.isEmpty, seen.insert(fields.foldedTitle).inserted else { continue }
+            built.append(fields)
+        }
+        names = built
+        self.tags = tags.map(QuickSearchTagTerm.init).filter { !$0.folded.isEmpty }
+    }
+
+    /// 主名称的折叠形式。
+    var foldedTitle: String { names.first?.foldedTitle ?? "" }
+    var pinyinFull: String? { names.first?.pinyinFull }
+    var pinyinInitials: String? { names.first?.pinyinInitials }
 }
 
 enum QuickSearchTextNormalizer {
@@ -84,7 +126,10 @@ enum QuickSearchMatchTier: Int, Comparable, Sendable {
     case contains = 3
     case pinyinPrefix = 4
     case pinyinInitials = 5
-    case fuzzy = 6
+    /// 名称一个字母都没对上，但用途标签对上了。排在所有名称命中之后：
+    /// 用户要的是名字里带「图」的软件，不是所有被标成「图片」的软件。
+    case tag = 6
+    case fuzzy = 7
 
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
@@ -95,6 +140,8 @@ struct QuickSearchMatch: Sendable, Equatable {
     let position: Int
     /// 模糊匹配跨过的字符数；非模糊为 0。
     let gap: Int
+    /// 仅 `.tag` 等级有值：命中的标签原样，用来在行上说明命中原因。
+    var matchedTags: [String] = []
 }
 
 enum QuickSearchMatcher {
@@ -105,15 +152,49 @@ enum QuickSearchMatcher {
         }
     }
 
-    static func match(query: String, fields: QuickSearchSearchFields) -> QuickSearchMatch? {
+    /// 用途标签最短要几个字符才参与匹配：单字母会把一整类软件全捞出来。
+    static let minimumTagQueryCharacters = 2
+    /// 拉丁前缀至少几个字符才允许「标签以输入开头」这条路。
+    /// 两个字母的 `co`/`of`/`ch` 能前缀命中 code/office/chat，等于把三大类
+    /// 软件全端上来，那是噪声不是搜索。三个字母起（`cha`→chat）已经足够指认。
+    static let minimumLatinTagPrefixCharacters = 3
+
+    /// 名称与用途的全部命中里取最好的一个。
+    ///
+    /// 每个名称变体都要试：只看显示名的话，「迅雷」就再也搜不到 Thunder。
+    static func match(
+        query: String,
+        fields: QuickSearchSearchFields,
+        includeTags: Bool
+    ) -> QuickSearchMatch? {
         let needle = fold(query)
         guard !needle.isEmpty else { return nil }
-        let haystack = fields.foldedTitle
+
+        var best: QuickSearchMatch?
+        for name in fields.names {
+            guard let hit = nameMatch(needle: needle, name: name) else { continue }
+            if best == nil || isBetter(hit, than: best!) { best = hit }
+        }
+        if includeTags, let hit = tagMatch(needle: needle, tags: fields.tags),
+           best == nil || isBetter(hit, than: best!) {
+            best = hit
+        }
+        return best
+    }
+
+    private static func isBetter(_ lhs: QuickSearchMatch, than rhs: QuickSearchMatch) -> Bool {
+        if lhs.tier != rhs.tier { return lhs.tier < rhs.tier }
+        if lhs.position != rhs.position { return lhs.position < rhs.position }
+        return lhs.gap < rhs.gap
+    }
+
+    private static func nameMatch(needle: String, name: QuickSearchNameFields) -> QuickSearchMatch? {
+        let haystack = name.foldedTitle
         guard !haystack.isEmpty else { return nil }
 
         if haystack == needle { return QuickSearchMatch(tier: .exact, position: 0, gap: 0) }
         if haystack.hasPrefix(needle) { return QuickSearchMatch(tier: .prefix, position: 0, gap: 0) }
-        if let tokenPosition = firstTokenPrefixPosition(needle: needle, tokens: fields.foldedTokens) {
+        if let tokenPosition = firstTokenPrefixPosition(needle: needle, tokens: name.foldedTokens) {
             return QuickSearchMatch(tier: .tokenPrefix, position: tokenPosition, gap: 0)
         }
         if let range = haystack.range(of: needle) {
@@ -123,19 +204,34 @@ enum QuickSearchMatcher {
 
         // 拼音分支只在拉丁输入上做：中文输入已经命中上面的普通匹配。
         if isASCIIALNumeric(needle) {
-            if let full = fields.pinyinFull, full.hasPrefix(needle) {
+            if let full = name.pinyinFull, full.hasPrefix(needle) {
                 return QuickSearchMatch(tier: .pinyinPrefix, position: 0, gap: 0)
             }
-            if let initials = fields.pinyinInitials, initials.hasPrefix(needle) {
+            if let initials = name.pinyinInitials, initials.hasPrefix(needle) {
                 return QuickSearchMatch(tier: .pinyinInitials, position: 0, gap: 0)
             }
         }
 
         // 轻量模糊：查询字符按顺序出现即可，记录跨过的字符数作为代价。
-        if let fuzzy = subsequenceMatch(needle: needle, haystack: haystack) {
-            return fuzzy
+        return subsequenceMatch(needle: needle, haystack: haystack)
+    }
+
+    /// 标签匹配只看前缀互含：「下」→「下载」不算（太短），「下载器」算命中，
+    /// 但标签的拼音不参与——输 `tu` 就把每个图片类软件捞出来是噪声，不是搜索。
+    private static func tagMatch(needle: String, tags: [QuickSearchTagTerm]) -> QuickSearchMatch? {
+        guard needle.count >= minimumTagQueryCharacters, !tags.isEmpty else { return nil }
+        let allowPrefixHit = !isASCIIALNumeric(needle) || needle.count >= minimumLatinTagPrefixCharacters
+        let hit = tags.filter { term in
+            if term.folded == needle || needle.hasPrefix(term.folded) { return true }
+            return allowPrefixHit && term.folded.hasPrefix(needle)
         }
-        return nil
+        guard !hit.isEmpty else { return nil }
+        return QuickSearchMatch(
+            tier: .tag,
+            position: 0,
+            gap: 0,
+            matchedTags: hit.map(\.display)
+        )
     }
 
     private static func fold(_ string: String) -> String {

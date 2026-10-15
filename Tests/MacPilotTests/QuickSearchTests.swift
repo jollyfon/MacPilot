@@ -86,7 +86,7 @@ private func searched(
     among entries: [QuickSearchApplicationEntry],
     usage: (QuickSearchApplicationEntry) -> Int = { _ in 0 }
 ) -> [String] {
-    ApplicationSearchProvider.search(query: query, entries: entries, usage: usage, limit: 20).map(\.title)
+    ApplicationSearchProvider.search(query: query, entries: entries, usage: usage, includeTags: false, limit: 20).map(\.title)
 }
 
 // MARK: - 匹配与排序
@@ -154,9 +154,9 @@ struct QuickSearchMatchingTests {
         // 这里不做全量编辑距离，候选也只在索引好的名称上比一次。
         let fields = QuickSearchSearchFields(title: "Superlonghostname")
 
-        #expect(QuickSearchMatcher.match(query: "sln", fields: fields)?.tier == .fuzzy)
-        #expect(QuickSearchMatcher.match(query: "sh", fields: fields) == nil)
-        #expect(QuickSearchMatcher.match(query: "hostname", fields: fields)?.tier == .contains)
+        #expect(QuickSearchMatcher.match(query: "sln", fields: fields, includeTags: false)?.tier == .fuzzy)
+        #expect(QuickSearchMatcher.match(query: "sh", fields: fields, includeTags: false) == nil)
+        #expect(QuickSearchMatcher.match(query: "hostname", fields: fields, includeTags: false)?.tier == .contains)
 
         let entries = [makeEntry("Superlonghostname", at: "/Applications/a.app")]
         #expect(searched("sln", among: entries) == ["Superlonghostname"])
@@ -169,7 +169,7 @@ struct QuickSearchMatchingTests {
         let usage: (QuickSearchApplicationEntry) -> Int = { $0.path == "/Applications/B.app" ? 9 : 1 }
 
         #expect(searched("mail", among: [a, b], usage: usage) == ["Mail", "Mail"])
-        let ranked = ApplicationSearchProvider.search(query: "mail", entries: [a, b], usage: usage, limit: 20)
+        let ranked = ApplicationSearchProvider.search(query: "mail", entries: [a, b], usage: usage, includeTags: false, limit: 20)
         #expect(ranked.first?.url.path == "/Applications/B.app")
     }
 
@@ -180,11 +180,11 @@ struct QuickSearchMatchingTests {
         let opened = makeEntry("AB Converter", at: "/Applications/Open.app", bundleID: "com.test.open")
         let usage: (QuickSearchApplicationEntry) -> Int = { $0.path == "/Applications/Open.app" ? 40 : 0 }
 
-        let ranked = ApplicationSearchProvider.search(query: "abc", entries: [exact, opened], usage: usage, limit: 20)
+        let ranked = ApplicationSearchProvider.search(query: "abc", entries: [exact, opened], usage: usage, includeTags: false, limit: 20)
         #expect(ranked.map(\.title) == ["AB Converter", "Abc"])
 
         // 都没开过 → 回到匹配程度：全名相同的在前。
-        let cold = ApplicationSearchProvider.search(query: "abc", entries: [exact, opened], limit: 20)
+        let cold = ApplicationSearchProvider.search(query: "abc", entries: [exact, opened], includeTags: false, limit: 20)
         #expect(cold.map(\.title) == ["Abc", "AB Converter"])
     }
 
@@ -206,8 +206,8 @@ struct QuickSearchMatchingTests {
             makeEntry("Zoom", at: "/Applications/Y/Z.app", bundleID: "com.test.z2"),
         ]
 
-        let first = ApplicationSearchProvider.search(query: "zoom", entries: entries, limit: 20).first
-        let second = ApplicationSearchProvider.search(query: "zoom", entries: entries.reversed(), limit: 20).first
+        let first = ApplicationSearchProvider.search(query: "zoom", entries: entries, includeTags: false, limit: 20).first
+        let second = ApplicationSearchProvider.search(query: "zoom", entries: entries.reversed(), includeTags: false, limit: 20).first
 
         #expect(first?.url.path == second?.url.path)
         #expect(first?.url.path == "/Applications/Y/Z.app")
@@ -216,13 +216,13 @@ struct QuickSearchMatchingTests {
     @Test func emptyQueryMatchesNothingSoThePanelShowsRecentsInstead() {
         let entries = makeEntries(["Safari", "Notes"])
 
-        #expect(ApplicationSearchProvider.search(query: "  ", entries: entries, limit: 20).isEmpty)
+        #expect(ApplicationSearchProvider.search(query: "  ", entries: entries, includeTags: false, limit: 20).isEmpty)
     }
 
     @Test func capsTheReturnedRows() {
         let entries = (0..<50).map { makeEntry("App\($0)", at: "/Applications/A\($0).app") }
 
-        #expect(ApplicationSearchProvider.search(query: "app", entries: entries, limit: 20).count == 20)
+        #expect(ApplicationSearchProvider.search(query: "app", entries: entries, includeTags: false, limit: 20).count == 20)
     }
 
     @MainActor

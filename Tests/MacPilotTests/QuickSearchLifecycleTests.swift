@@ -2422,6 +2422,7 @@ struct QuickSearchPerformanceTests {
                     query: term,
                     entries: entries,
                     usage: { _ in 0 },
+                    includeTags: false,
                     limit: QuickSearchLimits.applicationResults
                 )
                 samples.append(clock.now - start)
@@ -2804,4 +2805,49 @@ struct QuickSearchRealPanelPlacementTests {
     }
 
     private struct MissingScreenError: Error {}
+}
+
+// MARK: - 匹配范围
+
+/// 「只匹配名称 / 名称 + 用途」这一档设置在面板上的实际效果。
+/// 索引仍然来自注入的假扫描器，不读用户的 /Applications。
+@MainActor
+struct QuickSearchMatchScopeModelTests {
+    @Test func switchingTheMatchScopeReappliesTheQueryAlreadyOnScreen() async {
+        let harness = Harness()
+        let downloader = QuickSearchApplicationEntry(
+            url: URL(fileURLWithPath: "/Applications/Motrix.app"),
+            name: "Motrix",
+            bundleIdentifier: "com.test.motrix",
+            tags: ["下载", "download"]
+        )
+        await harness.enable(entries: [downloader] + sampleApps)
+        defer { harness.model.shutdown() }
+
+        harness.model.openPanel()
+        harness.model.updateQuery("下载")
+        harness.clock.fireAll()
+        #expect(harness.model.results.map(\.title) == ["Motrix"])
+
+        // 关掉用途匹配：这一条得当场消失，而不是等用户重打一遍。
+        harness.model.setMatchScope(.nameOnly)
+        #expect(harness.model.results.isEmpty)
+        #expect(harness.model.settings.matchScope == .nameOnly)
+
+        harness.model.setMatchScope(.nameAndPurpose)
+        #expect(harness.model.results.map(\.title) == ["Motrix"])
+    }
+
+    @Test func anEmptyQueryIsNotReRunWhenTheMatchScopeChanges() async {
+        let harness = Harness()
+        await harness.enable(entries: sampleApps)
+        defer { harness.model.shutdown() }
+
+        harness.model.usage.recordLaunch(of: sampleApps[0])
+        harness.model.openPanel()
+        harness.model.setMatchScope(.nameOnly)
+
+        // 空查询那一屏是收藏与最近使用，跟匹配范围无关，不该被改成空白。
+        #expect(harness.model.results.map(\.title) == ["Safari"])
+    }
 }
