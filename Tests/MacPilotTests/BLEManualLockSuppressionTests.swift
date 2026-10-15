@@ -35,6 +35,111 @@ struct BLEManualLockSuppressionTests {
         return (model, center, phone)
     }
 
+    @Test func aNearbyDeviceCanUnlockAfterManualLockDisplaySleepAndWake() {
+        for source in [nil, ScreenControlSource.localManual, .remoteExplicit] {
+            let (model, center, phone) = makeModel()
+            defer { model.shutdown() }
+            model.updateMonitoredPeripheral(-50, for: phone)
+            if let source { model.screenControl.willLock?(source) }
+            center.post(name: lockedNotification, object: nil)
+            model.updateMonitoredPeripheral(-45, for: phone)
+            #expect(!model.isUnlockAttemptScheduled)
+
+            model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+            model.updateMonitoredPeripheral(-45, for: phone)
+            #expect(!model.isUnlockAttemptScheduled)
+            model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+            #expect(!model.isUnlockAttemptScheduled, "Waking clears stale signal; a new close signal must arrive")
+            model.updateMonitoredPeripheral(-45, for: phone)
+            #expect(model.isUnlockAttemptScheduled)
+        }
+    }
+
+    @Test func wakeNotificationsAndUserInputWithoutPriorBlankingCannotUndoManualLock() {
+        let clock = ManualLockDepartureClock()
+        let (model, center, phone) = makeModel(departures: clock)
+        defer { model.shutdown() }
+        center.post(name: lockedNotification, object: nil)
+        clock.now += 600
+        model.evaluateUserActivityPolicy()
+        model.recordUserInput(at: clock.now)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        model.heldBlankNotificationCenterOverride?.post(name: DisplayPower.blankStateDidChangeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(!model.isUnlockAttemptScheduled)
+    }
+
+    @Test func aNewManualLockRequiresAnotherDisplaySleepWakeCycle() {
+        let (model, center, phone) = makeModel()
+        defer { model.shutdown() }
+        center.post(name: lockedNotification, object: nil)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(model.isUnlockAttemptScheduled)
+
+        center.post(name: lockedNotification, object: nil)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(!model.isUnlockAttemptScheduled)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(model.isUnlockAttemptScheduled)
+    }
+
+    @Test func restoringHeldBlankAllowsFreshSignalOnlyAfterItWasBlanked() {
+        let (model, center, phone) = makeModel()
+        defer { model.shutdown() }
+        center.post(name: lockedNotification, object: nil)
+        var blanked = true
+        model.displayUnavailableProbe = { blanked }
+        model.heldBlankNotificationCenterOverride?.post(name: DisplayPower.blankStateDidChangeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(!model.isUnlockAttemptScheduled)
+        blanked = false
+        model.heldBlankNotificationCenterOverride?.post(name: DisplayPower.blankStateDidChangeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(model.isUnlockAttemptScheduled)
+    }
+
+    @Test func aLockNotificationArrivingAfterDisplaySleepStillAllowsTheNextWake() {
+        let (model, center, phone) = makeModel()
+        defer { model.shutdown() }
+        var blanked = true
+        model.displayUnavailableProbe = { blanked }
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        center.post(name: lockedNotification, object: nil)
+        blanked = false
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(model.isUnlockAttemptScheduled)
+    }
+
+    @Test func genuineInputCanRecoverAfterBlankingWithoutAWakeNotification() {
+        let (model, center, phone) = makeModel()
+        defer { model.shutdown() }
+        center.post(name: lockedNotification, object: nil)
+        var blanked = true
+        model.displayUnavailableProbe = { blanked }
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        blanked = false
+        model.recordUserInput()
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(model.isUnlockAttemptScheduled)
+    }
+
+    @Test func displayWakeCannotBypassDisabledAutomaticUnlock() {
+        let (model, center, phone) = makeModel()
+        defer { model.shutdown() }
+        model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+        center.post(name: lockedNotification, object: nil)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(!model.isUnlockAttemptScheduled)
+    }
+
     @Test func systemLockCancelsAnAlreadyQueuedUnlockAndRejectsFreshSignal() {
         let (model, center, phone) = makeModel()
         defer { model.shutdown() }
@@ -125,7 +230,7 @@ struct BLEManualLockSuppressionTests {
         #expect(model.isUnlockAttemptScheduled)
     }
 
-    @Test func confirmedDepartureAndReturnRearmsSystemLocalAndRemoteManualLocks() throws {
+    @Test func confirmedDepartureAndReturnWaitForDisplaySleepWakeForEveryManualSource() throws {
         for source in [nil, ScreenControlSource.localManual, .remoteExplicit] {
             let departures = ManualLockDepartureClock()
             let (model, center, phone) = makeModel(departures: departures)
@@ -140,15 +245,19 @@ struct BLEManualLockSuppressionTests {
             let confirmDeparture = try #require(departures.actions.last)
             confirmDeparture()
             #expect(!model.presence)
-            #expect(!model.isUnlockAttemptScheduled, "Departure rearms; only a later fresh close signal authorizes unlocking")
+            #expect(!model.isUnlockAttemptScheduled, "Departure alone cannot undo a manual lock before display sleep and wake")
 
             model.updateMonitoredPeripheral(-45, for: phone)
             #expect(model.presence)
+            #expect(!model.isUnlockAttemptScheduled)
+            model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+            model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+            model.updateMonitoredPeripheral(-45, for: phone)
             #expect(model.isUnlockAttemptScheduled)
         }
     }
 
-    @Test func departureCanBeConfirmedAfterRecoveryHasAlreadyClearedPresence() throws {
+    @Test func departureAfterMonitoringResetCannotBypassTheDisplayWakeRequirement() throws {
         let departures = ManualLockDepartureClock()
         let (model, center, phone) = makeModel(departures: departures)
         defer { model.shutdown() }
@@ -163,6 +272,10 @@ struct BLEManualLockSuppressionTests {
         confirmDeparture()
         model.updateMonitoredPeripheral(-45, for: phone)
 
+        #expect(!model.isUnlockAttemptScheduled)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
         #expect(model.isUnlockAttemptScheduled)
     }
 
@@ -197,7 +310,7 @@ struct BLEManualLockSuppressionTests {
         #expect(!model.isUnlockAttemptScheduled)
     }
 
-    @Test func displaySleepAndSignalSilenceCannotTurnAnOldWeakSampleIntoADeparture() throws {
+    @Test func onlyDisplaySleepWakeRearmsAfterInterruptedWeakObservation() throws {
         for interruptWithSleep in [false, true] {
             let departures = ManualLockDepartureClock()
             let (model, center, phone) = makeModel(departures: departures)
@@ -215,11 +328,11 @@ struct BLEManualLockSuppressionTests {
             model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
             model.updateMonitoredPeripheral(-45, for: phone)
 
-            #expect(!model.isUnlockAttemptScheduled)
+            #expect(model.isUnlockAttemptScheduled == interruptWithSleep)
         }
     }
 
-    @Test func oneDistantDeviceCannotRearmAnAnyDeviceLockWhileAnotherIsNearby() throws {
+    @Test func bothDistantDevicesStillNeedDisplaySleepWakeToRearm() throws {
         let departures = ManualLockDepartureClock()
         let (model, center, phone) = makeModel(departures: departures)
         defer { model.shutdown() }
@@ -245,6 +358,10 @@ struct BLEManualLockSuppressionTests {
         confirmWatchDeparture()
         #expect(!model.presence)
         model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(!model.isUnlockAttemptScheduled)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
         #expect(model.isUnlockAttemptScheduled)
     }
 
@@ -266,7 +383,7 @@ struct BLEManualLockSuppressionTests {
         #expect(!model.isUnlockAttemptScheduled)
     }
 
-    @Test func aFullActiveSignalTimeoutAndReturnRearmsEveryManualLockSource() throws {
+    @Test func aFullActiveSignalTimeoutAndReturnWaitForDisplaySleepWake() throws {
         for source in [nil, ScreenControlSource.localManual, .remoteExplicit] {
             let departures = ManualLockDepartureClock()
             let (model, center, phone) = makeModel(departures: departures)
@@ -284,11 +401,15 @@ struct BLEManualLockSuppressionTests {
             model.updateMonitoredPeripheral(-45, for: phone)
 
             #expect(!model.activeConnectionsPaused)
+            #expect(!model.isUnlockAttemptScheduled)
+            model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+            model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+            model.updateMonitoredPeripheral(-45, for: phone)
             #expect(model.isUnlockAttemptScheduled)
         }
     }
 
-    @Test func aNewManualLockCannotInheritANearlyExpiredSignalTimeout() throws {
+    @Test func neitherOldNorCurrentSignalTimeoutCanBypassManualDisplayWake() throws {
         let departures = ManualLockDepartureClock()
         let (model, center, phone) = makeModel(departures: departures)
         defer { model.shutdown() }
@@ -303,15 +424,19 @@ struct BLEManualLockSuppressionTests {
         model.updateMonitoredPeripheral(-45, for: phone)
         #expect(!model.isUnlockAttemptScheduled)
 
-        // Only the current, complete observation window can rearm this lock.
+        // Even the current complete observation window must wait for display wake.
         let currentTimeout = try #require(departures.signalActions.last)
         departures.now += TimeInterval(model.settings.signalTimeout)
         currentTimeout()
         model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(!model.isUnlockAttemptScheduled)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        model.updateMonitoredPeripheral(-45, for: phone)
         #expect(model.isUnlockAttemptScheduled)
     }
 
-    @Test func aFullTimeoutDuringDisplaySleepCannotRearmAManualLock() throws {
+    @Test func displayWakeRearmsEvenAfterTimeoutWhileAsleep() throws {
         let departures = ManualLockDepartureClock()
         let (model, center, phone) = makeModel(departures: departures)
         defer { model.shutdown() }
@@ -326,10 +451,10 @@ struct BLEManualLockSuppressionTests {
         model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
         model.updateMonitoredPeripheral(-45, for: phone)
 
-        #expect(!model.isUnlockAttemptScheduled)
+        #expect(model.isUnlockAttemptScheduled)
     }
 
-    @Test func resumedMonitoringNeedsANewSignalBeforeTimeoutCanRearm() throws {
+    @Test func monitoringRestartAloneCannotReplaceDisplaySleepWake() throws {
         for restartMonitoring in [false, true] {
             let departures = ManualLockDepartureClock()
             let (model, center, phone) = makeModel(departures: departures)
@@ -349,7 +474,7 @@ struct BLEManualLockSuppressionTests {
             unobservedTimeout()
             model.updateMonitoredPeripheral(-45, for: phone)
 
-            #expect(!model.isUnlockAttemptScheduled)
+            #expect(model.isUnlockAttemptScheduled == !restartMonitoring)
         }
     }
 
@@ -368,7 +493,7 @@ struct BLEManualLockSuppressionTests {
         #expect(!model.isUnlockAttemptScheduled)
     }
 
-    @Test func oneTimedOutDeviceCannotRearmWhileAnotherAnyDeviceIsStillNearby() throws {
+    @Test func bothTimedOutDevicesStillNeedDisplaySleepWakeToRearm() throws {
         let departures = ManualLockDepartureClock()
         let (model, center, phone) = makeModel(departures: departures)
         defer { model.shutdown() }
@@ -393,6 +518,10 @@ struct BLEManualLockSuppressionTests {
         departures.now += TimeInterval(model.settings.signalTimeout)
         model.handleMonitoredSignalTimeout(for: watch)
         #expect(!model.presence)
+        model.updateMonitoredPeripheral(-45, for: phone)
+        #expect(!model.isUnlockAttemptScheduled)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        model.workspaceNotificationCenterOverride?.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
         model.updateMonitoredPeripheral(-45, for: phone)
         #expect(model.isUnlockAttemptScheduled)
     }

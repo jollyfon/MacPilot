@@ -139,6 +139,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     var screenStateNotificationCenterOverride: NotificationCenter?
     var screenLockStateProbe: () -> BLEScreenLockState = { ScreenLockStateReader.current() }
     private var manualLock = false
+    private var manualLockHasObservedDisplaySleep = false
     private var pendingLockSource: ScreenLockHistorySource?
     private var pendingLockSourceExpiresAt = Date.distantPast
     /// Maintained by `MacScreenControlService`, which owns the distributed
@@ -275,9 +276,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         )
         refreshPublishedMonitoringState()
         if manualLock, confirmedDeparture, !newPresence {
-            manualLock = false
-            unlockSignalTrigger.reset()
-            log("automatic unlock rearmed reason=confirmedDeparture")
+            log("manual lock retained reason=confirmedDeparture waitingForDisplayWake=true")
         }
         guard oldPresence != newPresence else {
             log("combined presence unchanged value=\(newPresence) reason=\(reason) devices=\(devicePresences)")
@@ -759,6 +758,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private func handleObservedUserInput() {
         let wasPaused = lastActiveConnectionPauseState ?? activeConnectionsPaused
+        // A genuine wake input may precede AppKit's screensDidWake notification.
+        if manualLock, manualLockHasObservedDisplaySleep, !displayUnavailableProbe(), !systemSleep {
+            displaySleep = false
+            screenControl.noteDisplaySleeping(false)
+            rearmAutomaticUnlockAfterManualLockDisplayWake(trigger: "userInputWake")
+            startDisplayWakeMonitoringRecovery(clearSignal: true)
+        }
         reconcileActiveConnectionPolicy(reason: "userInput")
         guard wasPaused else { return }
         if !activeConnectionsPaused { tryUnlockScreen(trigger: "userInput") }
@@ -1382,6 +1388,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private func suppressAutomaticUnlock(reason: String) {
         manualLock = true
+        manualLockHasObservedDisplaySleep = displayUnavailable
         // A departure window must start from a fresh distant sample after this
         // lock, rather than inheriting an old timer or a recovery reset.
         for runtime in monitoredRuntimes.values {
@@ -1400,6 +1407,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         lastAutomaticUnlockRequestAt = 0
         lastAutomaticUnlockConfirmationAt = 0
         log("automatic unlock suppressed reason=\(reason)")
+    }
+
+    private func rearmAutomaticUnlockAfterManualLockDisplayWake(trigger: String) {
+        guard manualLock, manualLockHasObservedDisplaySleep else { return }
+        manualLock = false
+        manualLockHasObservedDisplaySleep = false
+        unlockSignalTrigger.reset()
+        log("automatic unlock rearmed reason=manualLockDisplayWake trigger=\(trigger)")
     }
 
     private func formattedUnlockAge(_ age: TimeInterval?) -> String {
@@ -2004,6 +2019,9 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     private func handleSystemDidWake() {
         log("system did wake")
         systemSleep = false
+        if !displayUnavailable {
+            rearmAutomaticUnlockAfterManualLockDisplayWake(trigger: "systemWakeDisplayReady")
+        }
         screenControl.noteSystemSleeping(false)
         cancelMonitoringRecovery(reason: "systemWake")
         guard let plan = BLEWakeRecoveryPlan.make(
@@ -2035,6 +2053,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.displaySleep = true
+                if self.manualLock { self.manualLockHasObservedDisplaySleep = true }
                 self.screenControl.noteDisplaySleeping(true)
                 self.log("display sleep notification received")
                 self.reconcileActiveConnectionPolicy(reason: "screensDidSleep", force: true)
@@ -2046,6 +2065,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 let hadSleepTransition = self.displaySleep || self.systemSleep
                 self.log("display wake notification received")
                 self.displaySleep = false
+                self.rearmAutomaticUnlockAfterManualLockDisplayWake(trigger: "screensDidWake")
                 self.screenControl.noteDisplaySleeping(false)
                 self.userActivityMonitor.noteDisplayWake(
                     fromSleep: hadSleepTransition, waitingForUnlock: self.waitingForAutomaticUnlock
@@ -2065,10 +2085,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if !self.displayUnavailable {
+                    self.rearmAutomaticUnlockAfterManualLockDisplayWake(trigger: "heldBlankRestored")
                     self.userActivityMonitor.noteDisplayWake(
                         fromSleep: true, waitingForUnlock: self.waitingForAutomaticUnlock
                     )
                     self.startDisplayWakeMonitoringRecovery(clearSignal: true)
+                } else if self.manualLock {
+                    self.manualLockHasObservedDisplaySleep = true
                 }
                 self.reconcileActiveConnectionPolicy(reason: "heldBlankChanged", force: true)
             }
