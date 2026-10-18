@@ -136,6 +136,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     var displayUnavailableProbe: () -> Bool = {
         DisplayPower.isDisplayBlanked || CGDisplayIsAsleep(CGMainDisplayID()) != 0
     }
+    /// Fast user switching runs one MacPilot per logged-in user. Only the
+    /// session that owns the console may scan, connect, lock or unlock: screen
+    /// control injects HID events globally, so a background session acting on
+    /// "its" BLE device would type into the other user's screen.
+    var sessionOnConsoleProbe: () -> Bool = BLEUnlockModel.currentSessionIsOnConsole
+    private var sessionIsOnConsole = true
+    private var pickerWasActiveBeforeSessionSuspend = false
     var workspaceNotificationCenterOverride: NotificationCenter?
     var heldBlankNotificationCenterOverride: NotificationCenter?
     var screenStateNotificationCenterOverride: NotificationCenter?
@@ -302,6 +309,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     private func startConfiguredMonitoring(preservingExistingState: Bool = false) {
+        guard sessionIsOnConsole else {
+            logSettings("monitoring start deferred reason=backgroundSession")
+            return
+        }
         cancelUnlockAttempt(reason: "monitoring-restarted")
         let uuids = monitoredUUIDs
         let initialPresence = uuids.count == 1
@@ -426,12 +437,15 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         log("setEnabled from=\(settings.isEnabled) to=\(enabled)")
         settings.isEnabled = enabled
         if enabled {
+            sessionIsOnConsole = sessionOnConsoleProbe()
             startObservingSystemState()
-            if hasMonitoredDevice {
+            if sessionIsOnConsole, hasMonitoredDevice {
                 // Toggling the feature is an explicit user action, so this is
                 // the one path allowed to start the first Bluetooth prompt.
                 ensureCentralManager(explicitUserAction: true)
                 if centralMgr?.state == .poweredOn { startConfiguredMonitoring() }
+            } else if !sessionIsOnConsole {
+                log("monitoring deferred reason=backgroundSession")
             }
         } else {
             stopMonitoring()
@@ -446,10 +460,15 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             return
         }
         logSettings("configuration activation")
+        sessionIsOnConsole = sessionOnConsoleProbe()
         // System observers are only installed for an enabled feature: while BLE
         // is off they would keep the process awake for lock/sleep notifications
         // nothing consumes.
         startObservingSystemState()
+        guard sessionIsOnConsole else {
+            logSettings("configuration activation deferred reason=backgroundSession")
+            return
+        }
         // Do not create CBCentralManager during launch while Bluetooth access
         // is still undecided.  Creating it here makes every newly installed
         // or identity-mismatched build prompt before the user asks to use BLE.
@@ -629,6 +648,12 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         ensureCentralManager(explicitUserAction: true)
         isScanning = true
         startScanCleanupTimer()
+        // A deduplicated scan reports each peripheral exactly once. The picker
+        // removes rows after `signalTimeout`, so without duplicate callbacks
+        // every row disappears about a minute after opening and never returns
+        // while the same scan session is still running.
+        bluetoothScanner.setAllowsDuplicateAdvertisements(true)
+        _ = bluetoothScanner.restartIfPoweredOn()
         scanForPeripherals()
     }
 
@@ -638,7 +663,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         scanCleanupTimer?.stop()
         scanCleanupTimer = nil
         clearDiscoveredDevices()
-        if !hasMonitoredDevice && !activeMode { bluetoothScanner.stop() }
+        // Restore the bounded monitoring scan. `restartIfPoweredOn` applies the
+        // new options to a scan that is already running.
+        bluetoothScanner.setAllowsDuplicateAdvertisements(false)
+        if settings.isEnabled && hasMonitoredDevice {
+            _ = bluetoothScanner.restartIfPoweredOn()
+        } else {
+            bluetoothScanner.stop()
+        }
     }
 
     private func stopMonitoring() {
@@ -650,6 +682,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         systemWakeRecoveryTask?.cancel(); systemWakeRecoveryTask = nil
         cancelMonitoringRecovery(reason: "monitoringStopped")
         cancelUnlockAttempt()
+        bluetoothScanner.setAllowsDuplicateAdvertisements(false)
         bluetoothScanner.stop()
         clearDiscoveredDevices()
         for runtime in monitoredRuntimes.values {
@@ -690,6 +723,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     private func scanForPeripherals() {
+        guard sessionIsOnConsole else {
+            log("scan skipped reason=backgroundSession")
+            return
+        }
         guard let central = centralMgr else {
             log("scan skipped reason=noCentralManager")
             return
@@ -1117,18 +1154,27 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         guard central === centralMgr else { return }
-        log("central state updated state=\(String(describing: central.state)) authorization=\(String(describing: CBManager.authorization))")
-        switch central.state {
+        handleCentralStateChange(central.state)
+    }
+
+    /// Shared by the delegate callback and isolated radio regressions.
+    func handleCentralStateChange(_ state: CBManagerState) {
+        log("central state updated state=\(String(describing: state)) authorization=\(String(describing: CBManager.authorization))")
+        switch state {
         case .poweredOn:
             bluetoothPoweredOn = true
             bluetoothPowerWarned = false
+            guard sessionIsOnConsole else {
+                log("bluetooth powered on in a background session; monitoring stays suspended")
+                return
+            }
             if settings.isEnabled && hasMonitoredDevice {
                 if monitoredUUIDs.contains(where: { monitoredRuntimes[$0] == nil }) {
                     startConfiguredMonitoring()
                 } else {
                     scanForPeripherals()
                 }
-                restoreKnownMonitoredPeripherals(using: central)
+                if let central = centralMgr { restoreKnownMonitoredPeripherals(using: central) }
             } else if isScanning {
                 scanForPeripherals()
             }
@@ -1147,7 +1193,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 bluetoothPowerWarned = true
             }
         default:
-            log("bluetooth unavailable state=\(String(describing: central.state))")
+            log("bluetooth unavailable state=\(String(describing: state))")
             for runtime in monitoredRuntimes.values {
                 runtime.signalObservationIsContinuous = false
                 runtime.cancelProximityTimer()
@@ -1350,6 +1396,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
 
     private func lockOrSaveScreen(source: ScreenControlSource) {
+        guard sessionIsOnConsole else {
+            log("lock skipped reason=backgroundSession source=\(source.rawValue)")
+            return
+        }
         if let lockScreenOperation {
             lockScreenOperation(source)
             return
@@ -1413,6 +1463,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         screenLockStateProbe()
     }
 
+    /// A missing session dictionary keeps the pre-existing behavior; only an
+    /// explicit `kCGSSessionOnConsoleKey = false` marks a fast-switched
+    /// background session.
+    nonisolated static func currentSessionIsOnConsole() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return true }
+        return (session["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue ?? true
+    }
+
     func isScreenLocked() -> Bool {
         screenLockState() == .locked
     }
@@ -1420,6 +1478,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     private func tryUnlockScreen(trigger: String = "unspecified") {
         guard settings.isEnabled else {
             log("unlock skipped trigger=\(trigger) reason=featureDisabled")
+            return
+        }
+        guard sessionIsOnConsole else {
+            log("unlock skipped trigger=\(trigger) reason=backgroundSession")
             return
         }
         if manualLock {
@@ -2156,11 +2218,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             return
         }
         log("installing system observers")
-        userActivityMonitor.onInput = { [weak self] in self?.handleObservedUserInput() }
-        userActivityMonitor.start()
-        userActivityPolicyTimer = BackgroundTask.repeating(every: 5) { [weak self] in
-            self?.evaluateUserActivityPolicy()
-        }
+        if sessionIsOnConsole { startUserActivityObservation() }
         let nc = workspaceNotificationCenter
         observers.add(nc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -2218,17 +2276,28 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                 self?.handleSystemDidWake()
             }
         }, center: nc)
+        observers.add(nc.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleSessionDidResignActive() }
+        }, center: nc)
+        observers.add(nc.addObserver(forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleSessionDidBecomeActive() }
+        }, center: nc)
 
         let dnc = screenStateNotificationCenterOverride ?? DistributedNotificationCenter.default
         observers.add(dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.recordScreenLock(at: Date())
+                guard let self, self.sessionIsOnConsole else { return }
+                self.recordScreenLock(at: Date())
             }
         }, center: dnc)
         observers.add(dnc.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
             let eventDate = Date()
             MainActor.assumeIsolated {
                 guard let self else { return }
+                guard self.sessionIsOnConsole else {
+                    self.log("screen unlock notification ignored reason=backgroundSession")
+                    return
+                }
                 self.screenUnlockConfirmationTask?.stop()
                 self.screenUnlockConfirmationTask = BackgroundTask.once(after: 2) { [weak self] in
                     guard let self else { return }
@@ -2269,10 +2338,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     /// Removes the observers installed by `startObservingSystemState()`. Safe to
     /// call repeatedly; used when BLE is switched off and on app termination.
     func stopObservingSystemState() {
-        userActivityPolicyTimer?.stop()
-        userActivityPolicyTimer = nil
-        userActivityMonitor.onInput = nil
-        userActivityMonitor.stop()
+        stopUserActivityObservation()
         mediaResumeTask?.stop()
         mediaResumeTask = nil
         screenUnlockConfirmationTask?.stop()
@@ -2280,6 +2346,52 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         guard !observers.isEmpty else { return }
         observers.removeAll()
         log("removed system observers")
+    }
+
+    private func startUserActivityObservation() {
+        guard userActivityPolicyTimer == nil else { return }
+        userActivityMonitor.onInput = { [weak self] in self?.handleObservedUserInput() }
+        userActivityMonitor.start()
+        userActivityPolicyTimer = BackgroundTask.repeating(every: 5) { [weak self] in
+            self?.evaluateUserActivityPolicy()
+        }
+    }
+
+    private func stopUserActivityObservation() {
+        userActivityPolicyTimer?.stop()
+        userActivityPolicyTimer = nil
+        userActivityMonitor.onInput = nil
+        userActivityMonitor.stop()
+    }
+
+    /// Fast user switching keeps this process alive in the background. Stop
+    /// every BLE action there — the central, its connections and the signal
+    /// timers — while leaving the system observers installed for the return.
+    func handleSessionDidResignActive() {
+        guard sessionIsOnConsole else { return }
+        sessionIsOnConsole = false
+        log("session left the console; suspending BLE monitoring")
+        pickerWasActiveBeforeSessionSuspend = isScanning
+        stopUserActivityObservation()
+        stopMonitoring()
+    }
+
+    func handleSessionDidBecomeActive() {
+        let wasSuspended = !sessionIsOnConsole
+        sessionIsOnConsole = true
+        log("session became active on the console")
+        guard settings.isEnabled else {
+            log("session resume skipped reason=featureDisabled")
+            return
+        }
+        startUserActivityObservation()
+        let resumePicker = pickerWasActiveBeforeSessionSuspend
+        pickerWasActiveBeforeSessionSuspend = false
+        if hasMonitoredDevice, wasSuspended || monitoredRuntimes.isEmpty {
+            ensureCentralManager()
+            if centralMgr?.state == .poweredOn { startConfiguredMonitoring() }
+        }
+        if resumePicker { startScanning() }
     }
 }
 

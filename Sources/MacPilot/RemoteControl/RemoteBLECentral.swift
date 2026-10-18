@@ -97,6 +97,18 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         manager = nil
     }
 
+    /// A network-authenticated peer is about to open its bounded BLE identity
+    /// probe. Start a fresh attempt now and drop a backoff that was earned
+    /// while no phone was advertising, so the probe does not have to out-wait
+    /// a long idle interval.
+    func armForIdentityProbe() {
+        guard wantsToRun, peripheral == nil else { return }
+        consecutiveStalls = 0
+        retryTask?.cancel()
+        retryTask = nil
+        resetAttempt()
+    }
+
     // MARK: - Discovery
 
     private func beginScanningIfPossible() {
@@ -179,7 +191,9 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         peripheral.delegate = self
         central.stopScan()
         isScanning = false
-        onLog?("BLE found the phone; connecting")
+        // The UUID distinguishes two paired Apple devices advertising the same
+        // service; without it a failed service lookup cannot be attributed.
+        onLog?("BLE found the phone; connecting uuid=\(peripheral.identifier.uuidString) name=\(peripheral.name ?? "unknown") rssi=\(RSSI.intValue)")
         central.connect(peripheral)
     }
 
@@ -194,7 +208,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         error: Error?
     ) {
         guard wantsToRun, self.peripheral === peripheral else { return }
-        onLog?("BLE connect failed error=\(error?.localizedDescription ?? "unknown")")
+        onLog?("BLE connect failed uuid=\(peripheral.identifier.uuidString) error=\(error?.localizedDescription ?? "unknown")")
         resetAttempt()
     }
 
@@ -210,7 +224,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         guard wantsToRun, self.peripheral === peripheral else { return }
         // Leaving no trace here made a dropped link indistinguishable from a
         // scan that never found anything.
-        onLog?("BLE disconnected error=\(error?.localizedDescription ?? "none"); rescanning")
+        onLog?("BLE disconnected uuid=\(peripheral.identifier.uuidString) error=\(error?.localizedDescription ?? "none"); rescanning")
         resetAttempt()
     }
 
@@ -221,7 +235,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         guard error == nil,
               let service = peripheral.services?.first(where: { $0.uuid == RemoteBLEService.serviceUUID })
         else {
-            onLog?("BLE service discovery failed error=\(error?.localizedDescription ?? "not found")")
+            onLog?("BLE service discovery failed uuid=\(peripheral.identifier.uuidString) error=\(error?.localizedDescription ?? "not found")")
             resetAttempt()
             return
         }
@@ -237,7 +251,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         guard error == nil,
               let characteristic = service.characteristics?.first(where: { $0.uuid == RemoteBLEService.psmCharacteristicUUID })
         else {
-            onLog?("BLE PSM characteristic missing error=\(error?.localizedDescription ?? "not found")")
+            onLog?("BLE PSM characteristic missing uuid=\(peripheral.identifier.uuidString) error=\(error?.localizedDescription ?? "not found")")
             resetAttempt()
             return
         }
@@ -256,7 +270,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
               let data = characteristic.value,
               let psm = RemoteBLEService.decodePSM(data)
         else {
-            onLog?("BLE PSM read failed error=\(error?.localizedDescription ?? "bad value")")
+            onLog?("BLE PSM read failed uuid=\(peripheral.identifier.uuidString) error=\(error?.localizedDescription ?? "bad value")")
             resetAttempt()
             return
         }

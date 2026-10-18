@@ -340,6 +340,12 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
            deviceStore.pairedIdentityFingerprints[clientID] == fingerprint {
             onAuthenticatedBLEIdentity?(clientID, fingerprint, peripheralID)
         }
+        // The phone opens its bounded identity probe immediately after this
+        // network authentication. Align the Mac's discovery attempt with it
+        // instead of waiting out a backoff earned while nobody advertised.
+        if bleCentralStarted, supportsBLEIdentityLearning(clientID: clientID) {
+            bleCentral.armForIdentityProbe()
+        }
         refreshConnectedNames()
     }
 

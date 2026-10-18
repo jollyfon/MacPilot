@@ -32,7 +32,7 @@ struct RemoteBLEIdentityProbePolicyTests {
     }
 
     @Test func probeCannotRestartOrAcceptChannelsOutsideItsWindow() {
-        #expect(RemoteBLEIdentityProbePolicy.windowDuration == 12)
+        #expect(RemoteBLEIdentityProbePolicy.windowDuration == 30)
         #expect(!RemoteBLEIdentityProbePolicy.shouldStart(
             isForeground: true,
             alreadyAttemptedThisForeground: true,

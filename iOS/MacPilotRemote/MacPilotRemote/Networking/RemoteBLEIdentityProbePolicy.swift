@@ -4,7 +4,13 @@ import Foundation
 /// peripheral identity. It never determines whether the device is nearby; BLE
 /// Unlock still applies its own signal policy on the Mac.
 enum RemoteBLEIdentityProbePolicy {
-    static let windowDuration: TimeInterval = 12
+    /// The Mac discovers the phone in bounded attempts separated by an
+    /// exponential backoff (up to minutes while no phone is advertising). A
+    /// 12-second window regularly fell entirely inside a backoff interval, so
+    /// the identity was never learned; 30 seconds lets one foreground probe
+    /// overlap a realistic number of Mac scan attempts without advertising
+    /// indefinitely.
+    static let windowDuration: TimeInterval = 30
 
     static func shouldStart(
         isForeground: Bool,
