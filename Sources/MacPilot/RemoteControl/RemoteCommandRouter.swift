@@ -117,7 +117,8 @@ struct RemoteCommandRouter {
 
         case .beginRealtimeInput, .endRealtimeInput,
              .beginTextInput, .textInput, .endTextInput,
-             .beginRemoteVideo, .endRemoteVideo, .remotePointer, .remoteKey:
+             .beginRemoteVideo, .endRemoteVideo, .remotePointer, .remoteKey,
+             .claimBLEIdentity:
             // Intercepted by `RemoteConnection` before the router: they arm
             // per-connection session state, which the router never sees.
             return failure(for: request, code: .unsupportedCommand)

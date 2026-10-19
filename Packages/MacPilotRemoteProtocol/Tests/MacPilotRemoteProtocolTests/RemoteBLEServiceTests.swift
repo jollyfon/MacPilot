@@ -50,11 +50,14 @@ struct RemoteBLEServiceTests {
     func uuidsAreFrozen() {
         #expect(RemoteBLEService.serviceUUID == CBUUID(string: "6D616350-696C-6F74-0001-000000000001"))
         #expect(RemoteBLEService.psmCharacteristicUUID == CBUUID(string: "6D616350-696C-6F74-0001-000000000002"))
+        #expect(RemoteBLEService.identityClaimCharacteristicUUID == CBUUID(string: "6D616350-696C-6F74-0001-000000000003"))
         // The leading bytes are ASCII "macPilot" so the traffic is recognisable
         // in a packet capture.
         #expect(Array(RemoteBLEService.serviceUUID.data.prefix(8)) == Array("macPilot".utf8))
         // A copy-paste that collapsed these into one UUID would make the phone
-        // read a characteristic the Mac never answers.
+        // read a characteristic the Mac never answers, or make the Mac match a
+        // PSM read as an identity token.
         #expect(RemoteBLEService.serviceUUID != RemoteBLEService.psmCharacteristicUUID)
+        #expect(RemoteBLEService.psmCharacteristicUUID != RemoteBLEService.identityClaimCharacteristicUUID)
     }
 }

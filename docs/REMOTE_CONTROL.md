@@ -622,6 +622,20 @@ the error domain and code; this does not remove L2CAP encryption or bypass the
 authenticated remote-control handshake. These recovery safeguards are not proof
 that an operating-system channel-open error has been resolved on real hardware.
 
+Because `openL2CAPChannel` can fail with `CBErrorDomain/0` even while the PSM
+read succeeds, identity learning also has a GATT path. The phone writes an
+8-byte random token into its authenticated network session
+(`claimBLEIdentity`), publishes the same token on a read-only identity
+characteristic on the existing BLE service, and the Mac reads that
+characteristic during its next discovery attempt. A constant-time match learns
+the local `CBPeripheral.identifier`; the claim is single-use and expires with
+the probe window (30 seconds, capped at 120). The new `bleIdentityClaim`
+capability is negotiated only with a phone that declares the feature and whose
+pairing is explicitly bound to BLE Unlock, so an older phone never receives the
+command and an older Mac never advertises it. Reading the token is an ordinary
+unencrypted GATT read, exactly like the PSM read; the token is meaningless
+without the authenticated session that armed it and is never logged.
+
 ## Performance
 
 - **Fast path.** The iPhone still stores the host and port it last reached the Mac
@@ -805,24 +819,28 @@ removing the pairing or replacing its key revokes the learned UUID aliases.
 The original selected UUID remains for configuration/downgrade compatibility.
 
 The Mac learns a UUID only after the existing nonce-bound mutual authentication
-succeeds on a BLE L2CAP connection. Its source is the local central's
-`CBPeripheral.identifier`, attached to that exact channel before authentication,
-never a UUID supplied by the phone. Authentication alone does not mark the BLE
-device present or unlock: the normal fresh RSSI thresholds, timeouts and manual
-lock suppression still apply.
+succeeds on a BLE L2CAP connection, or after matching the token described above
+over GATT. In both cases the source is the local central's
+`CBPeripheral.identifier`, attached to the exact discovered peripheral, never a
+UUID supplied by the phone. Authentication alone does not mark the BLE device
+present or unlock: the normal fresh RSSI thresholds, timeouts and manual lock
+suppression still apply.
 
 The negotiated `bleIdentityLearning` capability is sent only to a feature-aware
-phone whose authenticated pairing is explicitly associated with BLE Unlock.
-An updated PilotNest can briefly keep its BLE advertisement/authentication probe
-alive after the preferred LAN/AWDL session wins, without promoting the probe or
-interrupting the active network session. Old peers retain their existing behavior.
+phone whose authenticated pairing is explicitly associated with BLE Unlock;
+`bleIdentityClaim` requires that same pairing and an explicit client
+declaration. An updated PilotNest can briefly keep its BLE
+advertisement/authentication probe alive after the preferred LAN/AWDL session
+wins, without promoting the probe or interrupting the active network session.
+Old peers retain their existing behavior.
 An old PilotNest still learns aliases whenever its normal BLE remote connection
-authenticates successfully; the new capability is not required on that path.
+authenticates successfully; the new capabilities are not required on that path.
 An updated PilotNest talking to an older Mac simply skips the optional probe.
 Neither learning nor successful probing is a prerequisite for remote commands,
 network connections or the existing BLE proximity policy.
 Probes stop on foreground-window expiry, authentication completion or backgrounding.
-No new commands or cryptographic handshake are introduced.
+The L2CAP path introduces no commands; `claimBLEIdentity` is the one optional,
+capability-gated command on the GATT path.
 
 At most eight learned aliases are retained per logical device, evicting the
 least-recently authenticated alias. Duplicate observations update metadata at

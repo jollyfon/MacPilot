@@ -132,7 +132,7 @@ struct RemoteVideoTests {
         #expect(RemoteCapability.negotiated(RemoteCapability.allCases, features: ["remoteDesktop"]) ==
             RemoteCapability.allCases.filter {
                 $0 != .dockGroups && $0 != .mediaControl && $0 != .bleIdentityLearning
-                    && $0 != .navigationKeys && $0 != .sidecar
+                    && $0 != .bleIdentityClaim && $0 != .navigationKeys && $0 != .sidecar
             })
     }
 

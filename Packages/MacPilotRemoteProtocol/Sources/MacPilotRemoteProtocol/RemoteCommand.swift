@@ -13,6 +13,13 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
     case unlock
     case wakeAndUnlock
     case ping
+    /// Registers a short-lived random token the Mac can read from this phone's
+    /// BLE identity characteristic. The phone sends this over the authenticated
+    /// network session first, then publishes the token over GATT, which is how
+    /// the Mac learns the peripheral UUID its own CoreBluetooth sees without
+    /// depending on the L2CAP channel that repeatedly fails to open.
+    /// Carries a `RemoteBLEIdentityClaim` payload.
+    case claimBLEIdentity
     /// Drive the panel backlight. Carries a `RemoteLevelRequest` payload.
     case setBrightness
     /// Drive the default output device's volume (and optionally its mute).
@@ -67,6 +74,7 @@ public enum RemoteCommand: String, Codable, Sendable, CaseIterable, Equatable {
         case .getState, .ping:
             return false
         case .lockScreen, .displayOff, .wakeDisplay, .unlock, .wakeAndUnlock,
+             .claimBLEIdentity,
              .setBrightness, .setVolume, .mediaPrevious, .mediaPlayPause, .mediaNext,
              .beginRealtimeInput, .endRealtimeInput,
              .beginTextInput, .textInput, .endTextInput,
@@ -108,6 +116,11 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
     /// identity, so an authenticated BLE session may report its observed
     /// peripheral identity for alias learning.
     case bleIdentityLearning
+    /// The Mac accepts `claimBLEIdentity` and reads the token from the phone's
+    /// BLE identity characteristic. Advertised only when the phone declares the
+    /// matching feature and this Mac has an explicit BLE Unlock binding for the
+    /// client, so a Mac without a binding never receives the command.
+    case bleIdentityClaim
     /// The Mac accepts explicit PageUp/PageDown/Home/End commands. Unlike
     /// older capabilities, this is negotiated only when the client declares
     /// the matching feature, not merely because it supports remote desktop.
@@ -133,7 +146,7 @@ public enum RemoteCapability: String, Codable, Sendable, CaseIterable, Equatable
                 // but already understood all three input capability cases.
                 known.contains(capability.rawValue) || known.contains(Self.remoteDesktop.rawValue)
             case .remoteDesktop, .dockGroups, .mediaControl, .bleIdentityLearning,
-                 .navigationKeys, .sidecar:
+                 .bleIdentityClaim, .navigationKeys, .sidecar:
                 known.contains(capability.rawValue)
             }
         }

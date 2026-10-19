@@ -1,5 +1,6 @@
 import CoreBluetooth
 import Foundation
+import MacPilotRemoteProtocol
 import MacPilotRemoteTransport
 
 /// Advertises the phone's MacPilot L2CAP channel so the Mac can reach it
@@ -28,6 +29,10 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     private var publishedService: CBMutableService?
     private var wantsToRun = false
     private var isOnAir = false
+    /// Token from the last `claimBLEIdentity`, served by the identity
+    /// characteristic until its validity window ends. Never logged.
+    private var identityClaimToken: Data?
+    private var identityClaimExpiryTask: Task<Void, Never>?
     #if DEBUG
     private var diagnosticTransport: L2CAPStreamTransport?
     private var isEchoDiagnostic: Bool {
@@ -69,11 +74,37 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         )
     }
 
+    /// Publishes a token the Mac can read over GATT. The claim is only useful
+    /// while the phone advertises, so this also makes sure the peripheral is
+    /// running; no advertisement payload changes, which keeps the link
+    /// protocol identical for every Mac build.
+    func beginIdentityClaim(token: Data, validity: TimeInterval) {
+        guard token.count == RemoteBLEIdentityClaim.tokenLength else {
+            onLog?("BLE identity claim ignored: wrong token length")
+            return
+        }
+        identityClaimToken = token
+        identityClaimExpiryTask?.cancel()
+        let bounded = min(max(validity, 1), RemoteBLEIdentityClaim.maximumValidity)
+        identityClaimExpiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(bounded))
+            guard !Task.isCancelled, let self else { return }
+            self.identityClaimToken = nil
+            self.identityClaimExpiryTask = nil
+            self.onLog?("BLE identity claim expired before a Mac read it")
+        }
+        start()
+        onLog?("BLE identity claim armed validity=\(Int(bounded))s; the Mac will read it over GATT")
+    }
+
     func stop() {
         #if DEBUG
         diagnosticTransport?.cancel()
         diagnosticTransport = nil
         #endif
+        identityClaimExpiryTask?.cancel()
+        identityClaimExpiryTask = nil
+        identityClaimToken = nil
         wantsToRun = false
         isOnAir = false
         guard let manager else { return }
@@ -95,7 +126,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     private func publishService(on manager: CBPeripheralManager) {
         let characteristic = RemoteBLEPSMCharacteristic.make()
         let service = CBMutableService(type: RemoteBLEService.serviceUUID, primary: true)
-        service.characteristics = [characteristic]
+        service.characteristics = [characteristic, RemoteBLEIdentityClaimCharacteristic.make()]
         publishedService = service
         manager.add(service)
     }
@@ -180,20 +211,36 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
-        guard wantsToRun,
-              request.characteristic.uuid == RemoteBLEService.psmCharacteristicUUID,
-              psmReadState.currentPSM != nil
-        else {
+        guard wantsToRun else {
             peripheral.respond(to: request, withResult: .requestNotSupported)
             return
         }
-        guard let value = psmReadState.response(offset: request.offset) else {
-            peripheral.respond(to: request, withResult: .invalidOffset)
-            return
+        switch request.characteristic.uuid {
+        case RemoteBLEService.psmCharacteristicUUID:
+            guard psmReadState.currentPSM != nil else {
+                peripheral.respond(to: request, withResult: .requestNotSupported)
+                return
+            }
+            guard let value = psmReadState.response(offset: request.offset) else {
+                peripheral.respond(to: request, withResult: .invalidOffset)
+                return
+            }
+            request.value = value
+            onLog?("BLE the Mac read the PSM; opening the L2CAP channel")
+            peripheral.respond(to: request, withResult: .success)
+        case RemoteBLEService.identityClaimCharacteristicUUID:
+            guard request.offset == 0 else {
+                peripheral.respond(to: request, withResult: .invalidOffset)
+                return
+            }
+            // Empty when the claim lapsed: the Mac then sees a mismatch and
+            // keeps its existing L2CAP fallback instead of learning anything.
+            request.value = identityClaimToken ?? Data()
+            onLog?("BLE the Mac read the identity claim")
+            peripheral.respond(to: request, withResult: .success)
+        default:
+            peripheral.respond(to: request, withResult: .requestNotSupported)
         }
-        request.value = value
-        onLog?("BLE the Mac read the PSM; opening the L2CAP channel")
-        peripheral.respond(to: request, withResult: .success)
     }
 
     func peripheralManager(

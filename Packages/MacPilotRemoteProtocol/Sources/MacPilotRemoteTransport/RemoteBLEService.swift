@@ -15,6 +15,11 @@ public enum RemoteBLEService {
     public nonisolated(unsafe) static let serviceUUID = CBUUID(string: "6D616350-696C-6F74-0001-000000000001")
     /// Read-only, holds the 16-bit little-endian L2CAP PSM.
     public nonisolated(unsafe) static let psmCharacteristicUUID = CBUUID(string: "6D616350-696C-6F74-0001-000000000002")
+    /// Read-only, holds the token from the client's latest `claimBLEIdentity`
+    /// or nothing when no claim is active. This is an ordinary unencrypted GATT
+    /// read on purpose: the PSM read already works in environments where the
+    /// encrypted L2CAP channel refuses to open.
+    public nonisolated(unsafe) static let identityClaimCharacteristicUUID = CBUUID(string: "6D616350-696C-6F74-0001-000000000003")
 
     /// The PSM as it travels on the wire.
     public static func encodePSM(_ psm: CBL2CAPPSM) -> Data {

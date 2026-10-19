@@ -580,6 +580,42 @@ final class RemoteAppModel: ObservableObject {
         isBLEIdentityProbeActive = true
         let probeID = UUID()
         bleIdentityProbeID = probeID
+        if connection.supportsBLEIdentityClaim {
+            sendBLEIdentityClaim(probeID: probeID)
+        } else {
+            startBLEIdentityProbeWindow(probeID: probeID)
+        }
+    }
+
+    /// New Macs: register a random token on the already authenticated network
+    /// session first, then let the Mac read it from this phone's GATT identity
+    /// characteristic. That path is independent of the encrypted L2CAP channel,
+    /// whose open step fails with `CBErrorDomain/0` on real hardware. A refusal,
+    /// timeout or older Mac falls back to the original L2CAP probe.
+    private func sendBLEIdentityClaim(probeID: UUID) {
+        let token = RemoteCrypto.randomData(count: RemoteBLEIdentityClaim.tokenLength)
+        let validity = RemoteBLEIdentityProbePolicy.windowDuration
+        let manager = connection
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let payload = try? RemoteBLEIdentityClaim(token: token, validity: validity).encoded()
+            let response = try? await manager.send(.claimBLEIdentity, payload: payload, timeout: 5)
+            guard self.isCurrent(manager),
+                  self.isForeground,
+                  self.bleIdentityProbeID == probeID else { return }
+            guard response?.success == true else {
+                self.raceLog("BLE identity claim refused; falling back to the L2CAP probe")
+                self.startBLEIdentityProbeWindow(probeID: probeID)
+                return
+            }
+            self.ble.beginIdentityClaim(token: token, validity: validity)
+            self.startBLEIdentityProbeWindow(probeID: probeID)
+            self.bleLog("BLE identity claim registered; the Mac reads the token over GATT")
+        }
+    }
+
+    private func startBLEIdentityProbeWindow(probeID: UUID) {
+        guard bleIdentityProbeID == probeID, isForeground else { return }
         ble.start()
         bleFallbackAdvertising = ble.isAdvertising
         bleLog("BLE identity probe started; window=\(Int(RemoteBLEIdentityProbePolicy.windowDuration))s")

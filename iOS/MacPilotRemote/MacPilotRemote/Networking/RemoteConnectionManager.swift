@@ -121,6 +121,11 @@ final class RemoteConnectionManager {
     var supportsBLEIdentityLearning: Bool {
         isReady && serverCapabilities.contains(.bleIdentityLearning)
     }
+    /// The Mac reads the identity token over GATT. When this is false (an older
+    /// Mac), the probe still uses the original L2CAP proof.
+    var supportsBLEIdentityClaim: Bool {
+        isReady && serverCapabilities.contains(.bleIdentityClaim)
+    }
     /// True once the link is up, even if the handshake is still running. The
     /// race uses it to tell "still dialling" from "mid handshake", which decides
     /// whether an attempt may still be cut short.

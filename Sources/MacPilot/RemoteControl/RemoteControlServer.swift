@@ -84,6 +84,12 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
         central.onChannel = { [weak self] channel, peripheralID in
             self?.accept(channel: channel, peripheralID: peripheralID)
         }
+        // A token read over GATT proves this phone published the claim the
+        // authenticated client registered. It carries the same weight as the
+        // old L2CAP proof for alias learning, without opening a channel.
+        central.onIdentityClaim = { [weak self] peripheralID, clientID, fingerprint in
+            self?.onAuthenticatedBLEIdentity?(clientID, fingerprint, peripheralID)
+        }
         return central
     }()
 
@@ -326,6 +332,27 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
     func supportsBLEIdentityLearning(clientID: String) -> Bool {
         guard let fingerprint = deviceStore.pairedIdentityFingerprints[clientID] else { return false }
         return isBLEIdentityLearningEnabled?(clientID, fingerprint) ?? false
+    }
+
+    func remoteConnection(
+        _ connection: RemoteConnection,
+        didClaimBLEIdentity claim: RemoteBLEIdentityClaim,
+        clientID: String,
+        keyFingerprint: String
+    ) -> Bool {
+        guard bleCentralStarted,
+              supportsBLEIdentityLearning(clientID: clientID),
+              deviceStore.pairedIdentityFingerprints[clientID] == keyFingerprint else {
+            log("BLE identity claim refused reason=notBound")
+            return false
+        }
+        bleCentral.expectIdentityClaim(
+            token: claim.token,
+            validity: claim.validity,
+            clientID: clientID,
+            keyFingerprint: keyFingerprint
+        )
+        return true
     }
 
     func remoteConnection(

@@ -694,6 +694,9 @@ struct RemoteConnectionIdleWatchdogTests {
         )
         var closed = 0
         var messages: [String] = []
+        var bleLearningClientIDs: Set<String> = []
+        var claims: [(token: Data, clientID: String, fingerprint: String)] = []
+        var acceptsClaims = true
 
         func remoteConnection(
             _ connection: RemoteConnection,
@@ -701,6 +704,20 @@ struct RemoteConnectionIdleWatchdogTests {
             name: String,
             address: String?
         ) {}
+
+        func supportsBLEIdentityLearning(clientID: String) -> Bool {
+            bleLearningClientIDs.contains(clientID)
+        }
+
+        func remoteConnection(
+            _ connection: RemoteConnection,
+            didClaimBLEIdentity claim: RemoteBLEIdentityClaim,
+            clientID: String,
+            keyFingerprint: String
+        ) -> Bool {
+            claims.append((claim.token, clientID, keyFingerprint))
+            return acceptsClaims
+        }
 
         func remoteConnectionDidClose(_ connection: RemoteConnection) { closed += 1 }
         func remoteLog(_ message: String) { messages.append(message) }
@@ -820,6 +837,132 @@ struct RemoteConnectionIdleWatchdogTests {
 
     private enum PublishedCapability: String, Decodable {
         case lock, displayOff, wake, unlock
+    }
+
+    /// A phone that completed the published handshake and now holds the
+    /// session key, which is the only state from which a BLE identity claim
+    /// can be sent.
+    private struct AuthenticatedSession {
+        let client: NWConnection
+        let session: RemoteSessionKey
+        let hello: RemoteHandshakeMessage
+        let clientID: String
+    }
+
+    private func authenticate(
+        harness: Harness,
+        clientID: UUID,
+        key: Data
+    ) async throws -> AuthenticatedSession {
+        let client = try await connectClient(to: harness.port)
+        let nonce = RemoteCrypto.randomData(count: RemoteCrypto.nonceLength)
+        try await send(RemoteFrameCodec.encodePlain(RemoteHandshakeMessage(
+            kind: .clientHello,
+            clientID: clientID,
+            clientName: "Claim Phone",
+            clientNonce: nonce,
+            // The real phone declares every capability it understands; a claim
+            // is only advertised back after that explicit declaration.
+            features: RemoteCapability.allCases.filter { $0 != .dockGroups }.map(\.rawValue)
+        )), on: client)
+        let hello = try RemoteFrameCodec.decodePlain(RemoteHandshakeMessage.self, from: await receiveFrame(on: client))
+        let serverNonce = try #require(hello.serverNonce)
+        try await send(RemoteFrameCodec.encodePlain(RemoteHandshakeMessage(
+            kind: .authRequest,
+            proof: RemoteCrypto.clientProof(pairingKey: key, clientNonce: nonce, serverNonce: serverNonce)
+        )), on: client)
+        let auth = try RemoteFrameCodec.decodePlain(RemoteHandshakeMessage.self, from: await receiveFrame(on: client))
+        try #require(auth.errorCode == nil)
+        let session = RemoteCrypto.sessionKey(pairingKey: key, clientNonce: nonce, serverNonce: serverNonce)
+        return AuthenticatedSession(
+            client: client,
+            session: session,
+            hello: hello,
+            clientID: clientID.uuidString
+        )
+    }
+
+    private func sendClaim(
+        _ payload: Data?,
+        sequence: UInt64 = 1,
+        on authenticated: AuthenticatedSession
+    ) async throws -> RemoteResponse {
+        let request = RemoteRequest(command: .claimBLEIdentity, sequence: sequence, payload: payload)
+        try await send(
+            RemoteFrameCodec.encodeSecure(request, key: authenticated.session, sequence: sequence),
+            on: authenticated.client
+        )
+        let frame = try await receiveFrame(on: authenticated.client)
+        let body = try RemoteFrameCodec.decodeSecure(frame, key: authenticated.session).plaintext
+        return try JSONDecoder().decode(RemoteResponse.self, from: body)
+    }
+
+    /// The phone learns the Mac's BLE peripheral UUID by proving what it just
+    /// published over GATT; only the authenticated, explicitly bound client may
+    /// arm that token.
+    @Test("an authenticated claim from a BLE-bound phone arms its token")
+    func authenticatedClaimWithBindingIsAccepted() async throws {
+        let harness = try await startHarness(idleTimeout: 5, idleCheckInterval: 0.1)
+        defer { harness.listener.cancel(); harness.box.connection?.close() }
+        let clientID = UUID()
+        let key = RemoteCrypto.randomData(count: RemoteCrypto.pairingKeyLength)
+        #expect(harness.host.deviceStore.storePairingKey(key, for: clientID.uuidString))
+        harness.host.bleLearningClientIDs = [clientID.uuidString]
+        let session = try await authenticate(harness: harness, clientID: clientID, key: key)
+        defer { session.client.cancel() }
+        #expect(session.hello.capabilities?.contains(.bleIdentityClaim) == true)
+
+        let claim = RemoteBLEIdentityClaim(
+            token: RemoteCrypto.randomData(count: RemoteBLEIdentityClaim.tokenLength)
+        )
+        let response = try await sendClaim(try claim.encoded(), on: session)
+
+        #expect(response.success)
+        #expect(harness.host.claims.count == 1)
+        #expect(harness.host.claims.first?.token == claim.token)
+        #expect(harness.host.claims.first?.clientID == session.clientID)
+        #expect(harness.host.claims.first?.fingerprint == RemoteDeviceStore.fingerprint(of: key))
+    }
+
+    @Test("a claim from a phone without an explicit BLE binding is refused")
+    func claimWithoutBLEBindingIsRefused() async throws {
+        let harness = try await startHarness(idleTimeout: 5, idleCheckInterval: 0.1)
+        defer { harness.listener.cancel(); harness.box.connection?.close() }
+        let clientID = UUID()
+        let key = RemoteCrypto.randomData(count: RemoteCrypto.pairingKeyLength)
+        #expect(harness.host.deviceStore.storePairingKey(key, for: clientID.uuidString))
+        let session = try await authenticate(harness: harness, clientID: clientID, key: key)
+        defer { session.client.cancel() }
+        #expect(session.hello.capabilities?.contains(.bleIdentityClaim) == false)
+
+        let claim = RemoteBLEIdentityClaim(
+            token: RemoteCrypto.randomData(count: RemoteBLEIdentityClaim.tokenLength)
+        )
+        let response = try await sendClaim(try claim.encoded(), on: session)
+
+        #expect(!response.success)
+        #expect(response.error?.code == .unsupportedCommand)
+        #expect(harness.host.claims.isEmpty)
+    }
+
+    @Test("a malformed claim never arms a token")
+    func malformedClaimIsRefused() async throws {
+        let harness = try await startHarness(idleTimeout: 5, idleCheckInterval: 0.1)
+        defer { harness.listener.cancel(); harness.box.connection?.close() }
+        let clientID = UUID()
+        let key = RemoteCrypto.randomData(count: RemoteCrypto.pairingKeyLength)
+        #expect(harness.host.deviceStore.storePairingKey(key, for: clientID.uuidString))
+        harness.host.bleLearningClientIDs = [clientID.uuidString]
+        let session = try await authenticate(harness: harness, clientID: clientID, key: key)
+        defer { session.client.cancel() }
+
+        // The right shape with the wrong token length must not reach the host.
+        let wrongSize = try RemoteBLEIdentityClaim(token: Data(repeating: 0x41, count: 3)).encoded()
+        let response = try await sendClaim(wrongSize, on: session)
+
+        #expect(!response.success)
+        #expect(response.error?.code == .invalidMessage)
+        #expect(harness.host.claims.isEmpty)
     }
 
     private struct PublishedHello: Decodable {

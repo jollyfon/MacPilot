@@ -14,6 +14,16 @@ protocol RemoteConnectionHost: AnyObject {
     var inputCoordinator: RemoteInputCoordinator { get }
     func supportsBLEIdentityLearning(clientID: String) -> Bool
 
+    /// Registers a short-lived BLE identity token for this authenticated
+    /// client. Returns `false` when the host has no BLE central or the binding
+    /// disappeared between the capability advertisement and the command.
+    func remoteConnection(
+        _ connection: RemoteConnection,
+        didClaimBLEIdentity claim: RemoteBLEIdentityClaim,
+        clientID: String,
+        keyFingerprint: String
+    ) -> Bool
+
     /// Dock groups, when the host wires them up. `nil` on hosts without the
     /// feature (and every test host), which makes the three Dock group
     /// commands answer `unsupportedCommand`.
@@ -41,6 +51,12 @@ protocol RemoteConnectionHost: AnyObject {
 
 extension RemoteConnectionHost {
     func supportsBLEIdentityLearning(clientID: String) -> Bool { false }
+    func remoteConnection(
+        _ connection: RemoteConnection,
+        didClaimBLEIdentity claim: RemoteBLEIdentityClaim,
+        clientID: String,
+        keyFingerprint: String
+    ) -> Bool { false }
     var dockGroupsHosting: (any RemoteDockGroupsHosting)? { nil }
     var sidecarHosting: (any RemoteSidecarHosting)? { nil }
 
@@ -93,6 +109,7 @@ final class RemoteConnection: Identifiable {
     private var pairingExchange: RemotePairingExchange?
 
     private(set) var isAuthenticated = false
+    private(set) var authenticatedClientID: String?
     private(set) var authenticatedClientName: String?
     private(set) var authenticatedPairingKeyFingerprint: String?
     private(set) var isClosed = false
@@ -336,6 +353,7 @@ final class RemoteConnection: Identifiable {
         var capabilities = host.advertisedCapabilities + [.remoteDesktop]
         if paired, host.supportsBLEIdentityLearning(clientID: incomingClientID.uuidString) {
             capabilities.append(.bleIdentityLearning)
+            capabilities.append(.bleIdentityClaim)
         }
         var reply = RemoteHandshakeMessage(
             kind: .serverHello,
@@ -414,6 +432,7 @@ final class RemoteConnection: Identifiable {
 
         sessionKey = RemoteCrypto.sessionKey(pairingKey: key, clientNonce: clientNonce, serverNonce: serverNonce)
         isAuthenticated = true
+        authenticatedClientID = clientID
         authenticatedPairingKeyFingerprint = RemoteDeviceStore.fingerprint(of: key)
         authenticatedClientName = clientName ?? "iPhone"
         logHandshakeLatency(event: "pairing")
@@ -444,6 +463,7 @@ final class RemoteConnection: Identifiable {
 
         sessionKey = RemoteCrypto.sessionKey(pairingKey: key, clientNonce: clientNonce, serverNonce: serverNonce)
         isAuthenticated = true
+        authenticatedClientID = clientID
         authenticatedPairingKeyFingerprint = RemoteDeviceStore.fingerprint(of: key)
         authenticatedClientName = clientName ?? "iPhone"
         host.deviceStore.markConnected(clientID: clientID, address: remoteAddress)
@@ -507,6 +527,8 @@ final class RemoteConnection: Identifiable {
             try sendSecure(realtimeInputResponse(for: request), key: key)
         case .beginTextInput, .textInput, .endTextInput:
             try sendSecure(textInputResponse(for: request), key: key)
+        case .claimBLEIdentity:
+            try sendSecure(bleIdentityClaimResponse(for: request), key: key)
         case .beginRemoteVideo:
             // Capture permission/discovery/listener setup must never block
             // the ordered drain of subsequent realtime input frames.
@@ -598,6 +620,37 @@ final class RemoteConnection: Identifiable {
         }
         return RemoteResponse(requestID: request.requestID, success: success,
                               error: success ? nil : RemoteError(code: .textInputUnavailable))
+    }
+
+    /// The claim is a bearer token the phone publishes over GATT. It is only
+    /// accepted from the client that completed this encrypted handshake, and
+    /// only while that client still has an explicit BLE Unlock binding; the
+    /// router never sees it because it needs per-connection authentication.
+    private func bleIdentityClaimResponse(for request: RemoteRequest) -> RemoteResponse {
+        guard isAuthenticated, let host, let clientID = authenticatedClientID,
+              let fingerprint = authenticatedPairingKeyFingerprint else {
+            return RemoteResponse(requestID: request.requestID, success: false,
+                                  error: RemoteError(code: .unauthenticated))
+        }
+        guard host.supportsBLEIdentityLearning(clientID: clientID) else {
+            return RemoteResponse(requestID: request.requestID, success: false,
+                                  error: RemoteError(code: .unsupportedCommand))
+        }
+        guard let claim = RemoteBLEIdentityClaim.decoded(from: request.payload) else {
+            return RemoteResponse(requestID: request.requestID, success: false,
+                                  error: RemoteError(code: .invalidMessage))
+        }
+        let accepted = host.remoteConnection(
+            self,
+            didClaimBLEIdentity: claim,
+            clientID: clientID,
+            keyFingerprint: fingerprint
+        )
+        return RemoteResponse(
+            requestID: request.requestID,
+            success: accepted,
+            error: accepted ? nil : RemoteError(code: .unsupportedCommand)
+        )
     }
 
     private func desktopResponse(for request: RemoteRequest) async -> RemoteResponse {

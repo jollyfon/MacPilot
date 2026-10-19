@@ -35,3 +35,18 @@ enum RemoteBLEPSMCharacteristic {
         )
     }
 }
+
+/// Answers a plain GATT read with the token from the latest identity claim, or
+/// an empty value when no claim is active. Deliberately unencrypted: the
+/// encrypted L2CAP channel is exactly what fails on real hardware, while the
+/// ordinary PSM read on this same service already works in that environment.
+enum RemoteBLEIdentityClaimCharacteristic {
+    static func make() -> CBMutableCharacteristic {
+        CBMutableCharacteristic(
+            type: RemoteBLEService.identityClaimCharacteristicUUID,
+            properties: [.read],
+            value: nil,
+            permissions: [.readable]
+        )
+    }
+}

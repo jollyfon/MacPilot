@@ -420,7 +420,17 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
             }
             if !added.isEmpty, let central = centralMgr, central.state == .poweredOn {
                 restoreKnownMonitoredPeripherals(using: central)
-                scanForPeripherals()
+                // The monitoring scan is deduplicated: it already reported this
+                // peripheral before the alias existed, so simply starting it
+                // again (a no-op while `isScanning`) would never deliver the
+                // advertisement that now belongs to a monitored device. A
+                // restart creates a fresh discovery session and lets the
+                // connect that follows turn this alias into a live RSSI link.
+                if central.isScanning {
+                    _ = bluetoothScanner.restartIfPoweredOn()
+                } else {
+                    scanForPeripherals()
+                }
             }
         }
         log("authenticated BLE identity learned uuid=\(peripheralUUID.uuidString) newAlias=\(!added.isEmpty)")

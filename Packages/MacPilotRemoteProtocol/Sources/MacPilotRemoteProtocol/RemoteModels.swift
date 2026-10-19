@@ -106,6 +106,46 @@ public struct RemoteLevelRequest: Codable, Sendable, Equatable {
     }
 }
 
+/// Payload for `claimBLEIdentity`.
+///
+/// The phone chooses a random token and sends it over the authenticated,
+/// encrypted network session; it then publishes the same token on the BLE
+/// identity characteristic. The Mac reads that characteristic during its
+/// bounded discovery attempt and learns the peripheral UUID only on a match.
+/// The GATT read is what makes this reliable: the L2CAP handshake that used to
+/// carry the proof can fail with `CBErrorDomain/0` before any byte flows.
+public struct RemoteBLEIdentityClaim: Codable, Sendable, Equatable {
+    /// Eight bytes fit an ordinary legacy BLE advertisement if this ever needs
+    /// to move into service data, and are ample for a token that only lives in
+    /// the paired client's authenticated session for half a minute.
+    public static let tokenLength = 8
+    /// A claim must be short-lived; the Mac clamps the requested window to this.
+    public static let maximumValidity: TimeInterval = 120
+
+    public let token: Data
+    public let validity: TimeInterval
+
+    public init(token: Data, validity: TimeInterval = 30) {
+        self.token = token
+        self.validity = validity
+    }
+
+    public var isValid: Bool {
+        token.count == Self.tokenLength && validity > 0 && validity <= Self.maximumValidity
+    }
+
+    public func encoded() throws -> Data { try JSONEncoder().encode(self) }
+
+    /// `nil` for a missing, undecodable, oversized or expired-by-construction
+    /// claim, which the server reports as `invalidMessage`.
+    public static func decoded(from payload: Data?) -> RemoteBLEIdentityClaim? {
+        guard let payload, !payload.isEmpty,
+              let claim = try? JSONDecoder().decode(RemoteBLEIdentityClaim.self, from: payload),
+              claim.isValid else { return nil }
+        return claim
+    }
+}
+
 /// Stable, localized-on-the-client error vocabulary. Raw macOS errors never
 /// cross the network; the iPhone maps these codes to human readable text.
 public enum RemoteErrorCode: String, Codable, Sendable, Equatable, CaseIterable {
