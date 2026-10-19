@@ -116,6 +116,89 @@ struct BLERediscoveryTests {
         #expect(h.locks.isEmpty)
     }
 
+    @Test func renewedSignalDeadlineReusesTimerAndEarlyWakeWaitsForLatestDeadline() throws {
+        let h = Harness(includeSecondaryDevice: false)
+        defer { h.model.shutdown() }
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        let runtime = try #require(h.model.runtime(for: h.phone))
+        let initialAction = try #require(h.signalActions.last)
+        let initialActionCount = h.signalActions.count
+        let initialScheduledDeadline = try #require(runtime.signalTimerScheduledDeadline)
+
+        for _ in 0..<5 {
+            h.now += 5
+            h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        }
+
+        let renewedDeadline = try #require(runtime.signalTimeoutDeadline)
+        #expect(renewedDeadline > initialScheduledDeadline)
+        #expect(h.signalActions.count == initialActionCount, "Fresh RSSI renews the deadline without replacing the armed timer")
+
+        h.now = initialScheduledDeadline
+        initialAction.action()
+        #expect(h.signalActions.count == initialActionCount + 1)
+        let renewedAction = try #require(h.signalActions.last)
+        #expect(runtime.signalTimerScheduledDeadline == renewedDeadline)
+        #expect(renewedAction.delay == renewedDeadline - h.now)
+        #expect(!runtime.verifyingSignalLoss, "An early timer wake must not start loss verification")
+
+        let actionCountAfterRearm = h.signalActions.count
+        initialAction.action()
+        #expect(h.signalActions.count == actionCountAfterRearm, "A duplicate callback from the consumed arm must be ignored")
+
+        h.now = renewedDeadline
+        renewedAction.action()
+        #expect(runtime.verifyingSignalLoss)
+        #expect(h.locks.isEmpty)
+        #expect(h.signalActions.last?.delay == 10, "A real timeout still enters the bounded rediscovery check")
+    }
+
+    @Test func shorteningSignalDeadlineRearmsEarlierAndRejectsTheOldCallback() throws {
+        let h = Harness(includeSecondaryDevice: false)
+        defer { h.model.shutdown() }
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        let runtime = try #require(h.model.runtime(for: h.phone))
+        let oldAction = try #require(h.signalActions.last)
+        let oldActionCount = h.signalActions.count
+        let oldScheduledDeadline = try #require(runtime.signalTimerScheduledDeadline)
+
+        h.now += 10
+        h.model.settings.signalTimeout = 20
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+
+        let shortenedDeadline = try #require(runtime.signalTimeoutDeadline)
+        #expect(shortenedDeadline < oldScheduledDeadline)
+        #expect(h.signalActions.count == oldActionCount + 1)
+        let shortenedAction = try #require(h.signalActions.last)
+        #expect(runtime.signalTimerScheduledDeadline == shortenedDeadline)
+
+        h.now = shortenedDeadline
+        oldAction.action()
+        #expect(!runtime.verifyingSignalLoss, "The cancelled later arm cannot consume the shortened deadline")
+
+        shortenedAction.action()
+        #expect(runtime.verifyingSignalLoss)
+        #expect(h.locks.isEmpty)
+    }
+
+    @Test func invalidatingSignalTimerMakesItsPendingCallbackStale() throws {
+        let h = Harness(includeSecondaryDevice: false)
+        defer { h.model.shutdown() }
+        h.model.receiveMonitoredAdvertisement(-50, for: h.phone)
+        let runtime = try #require(h.model.runtime(for: h.phone))
+        let pendingAction = try #require(h.signalActions.last)
+
+        runtime.invalidateTimers()
+        let invalidatedGeneration = runtime.signalTimerGeneration
+        h.now += 100
+        pendingAction.action()
+
+        #expect(runtime.signalTimerGeneration == invalidatedGeneration)
+        #expect(runtime.signalTimeoutDeadline == nil)
+        #expect(runtime.signalTimer == nil)
+        #expect(h.locks.isEmpty)
+    }
+
     @Test func aFreshWatchPreventsLockWhenThePhoneReallyStopsResponding() throws {
         let h = Harness()
         defer { h.model.shutdown() }
@@ -195,7 +278,7 @@ struct BLERediscoveryTests {
         var signalActions: [(delay: TimeInterval, action: @MainActor () -> Void)] = []
         var proximityActions: [(delay: TimeInterval, action: @MainActor () -> Void)] = []
 
-        init() {
+        init(includeSecondaryDevice: Bool = true) {
             model = BLEUnlockModel(
                 userActivityMonitor: BLEUserActivityMonitor(uptime: { [weak self] in self?.now ?? 0 }, observesEvents: false),
                 bluetoothScanner: scanner,
@@ -219,7 +302,9 @@ struct BLERediscoveryTests {
                 self?.proximityActions.append((delay, action))
                 return BackgroundTask.once(after: 3_600) {}
             }
-            model.secondaryMonitoredUUID = watch
+            if includeSecondaryDevice {
+                model.secondaryMonitoredUUID = watch
+            }
             model.startMonitor(phone)
         }
     }

@@ -104,6 +104,73 @@ struct BLEMonitoringRestorationTests {
         #expect(model.isUnlockAttemptScheduled, "A fresh close sample must trigger unlock even if presence was already true")
     }
 
+    @Test func disabledAndWakeOnlyUnlockModesSkipScreenLockProbe() {
+        var screenLockProbeCount = 0
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: RecordingBluetoothScanner(),
+            eventScriptRunner: { _ in }
+        )
+        defer { model.shutdown() }
+        model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = {
+            screenLockProbeCount += 1
+            return .unlocked
+        }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = BLEUnlockModel.unlockDisabled
+        let phone = UUID()
+        model.startMonitor(phone)
+
+        for _ in 0..<10 { model.updateMonitoredPeripheral(-50, for: phone) }
+        #expect(screenLockProbeCount == 0, "Disabled automatic unlock does not need a system screen-state query")
+
+        model.settings.unlockRSSI = -70
+        model.settings.wakeWithoutUnlocking = true
+        model.updateMonitoredPeripheral(-50, for: phone)
+        #expect(screenLockProbeCount == 0, "Wake-only mode skips the unlock screen-state query")
+
+        model.settings.wakeWithoutUnlocking = false
+        model.updateMonitoredPeripheral(-80, for: phone)
+        #expect(screenLockProbeCount == 0, "A distant signal skips the unlock screen-state query")
+        #expect(!model.isUnlockAttemptScheduled)
+    }
+
+    @Test func latchedCycleObservesUnlockDuringIneligibleSignalAndAllowsANewLock() {
+        var screenLockProbeCount = 0
+        var screenState = BLEScreenLockState.unlocked
+        let model = BLEUnlockModel(
+            userActivityMonitor: BLEUserActivityMonitor(observesEvents: false),
+            bluetoothScanner: RecordingBluetoothScanner(),
+            eventScriptRunner: { _ in }
+        )
+        defer { model.shutdown() }
+        model.displayUnavailableProbe = { false }
+        model.screenLockStateProbe = {
+            screenLockProbeCount += 1
+            return screenState
+        }
+        model.settings.isEnabled = true
+        model.settings.lockRSSI = BLEUnlockModel.lockDisabled
+        model.settings.unlockRSSI = -70
+        let phone = UUID()
+        model.startMonitor(phone)
+        screenLockProbeCount = 0
+
+        // Seed a previous lock cycle without starting real unlock work.
+        model.unlockSignalTrigger.noteScheduled()
+        model.updateMonitoredPeripheral(-80, for: phone)
+        #expect(screenLockProbeCount == 1, "A latched cycle still observes an ineligible signal to detect an unlock")
+        #expect(!model.unlockSignalTrigger.hasScheduledForLock)
+        #expect(!model.isUnlockAttemptScheduled)
+
+        screenState = .locked
+        model.updateMonitoredPeripheral(-50, for: phone)
+        #expect(screenLockProbeCount == 2, "An eligible signal checks the actual screen state last")
+        #expect(model.isUnlockAttemptScheduled, "A newly observed lock can schedule an unlock after the prior cycle cleared")
+    }
+
     @Test func freshSignalCannotUndoAnExplicitManualOrRemoteLock() {
         for source in [ScreenControlSource.localManual, .remoteExplicit] {
             let model = BLEUnlockModel(

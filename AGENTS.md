@@ -156,6 +156,7 @@ Everything persisted under `StoredConfiguration` (`config.json` + sidecar files)
 - A pin may only react to the pointer when it owns the pixel the pointer is on. Menus, combobox dropdowns and tooltips draw above the pin's `floating + 2` level; reacting to a geometric frame hit instead made the pin take key window status and closed another app's popup, so an item overlapping a pin could never be clicked. Use `QuickAccessPinHoverCoverage`; a short or empty window-server sweep answers "exposed", never "covered".
 - The coverage verdict costs a `CGWindowListCopyWindowInfo` walk, so it stays edge-triggered plus interval-throttled through `sweepIsWorthRunning` — an exposed, already-key pin must run zero sweeps. Do not move that call into every pointer event, and keep coordinate conversion hoisted (one main-display height, one subtraction): per-window `DisplayMapping` rebuilds are far too expensive on this path.
 - A locked pin keeps geometric mouse passthrough: it never takes key status and shows no hover chrome, so a cover must not change whether clicks reach it.
+- Pins share one local/global mouse-monitor pair. Publish hover state only on transitions; repeated pointer positions must not invalidate every pin's SwiftUI view. Closing/suspending the last pin removes both monitors. Keep zoom easing time-based across refresh rates and reuse the HUD hide timer through each gesture. `QuickAccessPinPerformanceTests` covers publication counts, shared-monitor lifetime, and zoom behavior without displaying windows.
 
 ## Project Summary
 

@@ -177,6 +177,7 @@ private final class QuickAccessPinWindowController: NSObject {
   private var annotationHostView: NSView?
   private var targetZoomFactor: CGFloat = 1
   private var zoomTimer: Timer?
+  private var lastZoomFrameTime: TimeInterval?
   private var zoomCenter: CGPoint?
 
   init(item: QuickAccessItem, language: AppLanguage) {
@@ -562,7 +563,9 @@ private final class QuickAccessPinWindowController: NSObject {
 
   private func startZoomAnimationLoop() {
     guard zoomTimer == nil else { return }
-    let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+    let frameRate = min(120, max(1, window.screen?.maximumFramesPerSecond ?? 60))
+    lastZoomFrameTime = ProcessInfo.processInfo.systemUptime
+    let timer = Timer(timeInterval: 1.0 / Double(frameRate), repeats: true) { [weak self] _ in
       MainActor.assumeIsolated {
         self?.tickZoomAnimation()
       }
@@ -576,16 +579,22 @@ private final class QuickAccessPinWindowController: NSObject {
     TimerRegistry.unregister(zoomTimer)
     zoomTimer?.invalidate()
     zoomTimer = nil
+    lastZoomFrameTime = nil
     zoomCenter = nil
   }
 
   private func tickZoomAnimation() {
+    let now = ProcessInfo.processInfo.systemUptime
+    let elapsed = max(0, now - (lastZoomFrameTime ?? now))
+    lastZoomFrameTime = now
     let diff = targetZoomFactor - state.zoomFactor
     if abs(diff) < 0.001 {
       state.updateZoomFactor(targetZoomFactor)
       stopZoomAnimationLoop()
     } else {
-      state.updateZoomFactor(state.zoomFactor + diff * 0.2)
+      state.updateZoomFactor(QuickAccessPinZoomAnimation.nextFactor(
+        current: state.zoomFactor, target: targetZoomFactor, elapsed: elapsed
+      ))
     }
     resize(to: state.displaySize, animated: false)
   }

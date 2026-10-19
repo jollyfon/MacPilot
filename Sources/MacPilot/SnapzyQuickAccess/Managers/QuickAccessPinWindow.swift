@@ -8,7 +8,7 @@
 import AppKit
 
 @MainActor
-final class QuickAccessPinWindow: NSPanel {
+final class QuickAccessPinWindow: NSPanel, QuickAccessPinMouseTracking {
   private static let pinnedWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 2)
   internal static let scrollZoomSensitivityPrecise: CGFloat = 0.0015
   internal static let scrollZoomSensitivityCoarse: CGFloat = 0.02
@@ -18,8 +18,6 @@ final class QuickAccessPinWindow: NSPanel {
   var onZoomStepRequested: ((CGFloat) -> Void)?
 
   private weak var pinState: QuickAccessPinWindowState?
-  private var localMouseMonitor: Any?
-  private var globalMouseMonitor: Any?
   private var localKeyMonitor: Any?
   private var globalKeyMonitor: Any?
   /// Hover state carried between pointer events, because the verdict about
@@ -80,16 +78,18 @@ final class QuickAccessPinWindow: NSPanel {
   }
 
   func updateMousePassthrough() {
+    updateMousePassthrough(at: NSEvent.mouseLocation, now: Date())
+  }
+
+  func updateMousePassthrough(at mouseLocation: CGPoint, now: Date) {
     guard let pinState else {
       ignoresMouseEvents = false
       return
     }
 
-    let mouseLocation = NSEvent.mouseLocation
     let isGeometricallyInside = frame.contains(mouseLocation)
     let didCrossIntoFrame = isGeometricallyInside && !lastPointerWasInsideFrame
     lastPointerWasInsideFrame = isGeometricallyInside
-    let now = Date()
 
     if QuickAccessPinHoverCoverage.sweepIsWorthRunning(
       pointerIsInsideFrame: isGeometricallyInside,
@@ -112,7 +112,7 @@ final class QuickAccessPinWindow: NSPanel {
     // above all, no key window — taking key status is what used to close the
     // other application's popup out from under the user.
     let isInside = isGeometricallyInside && !hoverIsCovered
-    pinState.isMouseInside = isInside
+    pinState.updateMouseInside(isInside)
 
     guard pinState.isLocked else {
       if pinState.isPointerInLockHotspot {
@@ -170,24 +170,7 @@ final class QuickAccessPinWindow: NSPanel {
   }
 
   private func installMouseMonitors() {
-    let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
-
-    if localMouseMonitor == nil {
-      localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-        MainActor.assumeIsolated {
-          self?.updateMousePassthrough()
-        }
-        return event
-      }
-    }
-
-    if globalMouseMonitor == nil {
-      globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
-        Task { @MainActor in
-          self?.updateMousePassthrough()
-        }
-      }
-    }
+    QuickAccessPinMouseMonitor.shared.add(self)
 
     if localKeyMonitor == nil {
       localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -220,14 +203,7 @@ final class QuickAccessPinWindow: NSPanel {
   }
 
   private func removeMouseMonitorsOnly() {
-    if let localMouseMonitor {
-      NSEvent.removeMonitor(localMouseMonitor)
-      self.localMouseMonitor = nil
-    }
-    if let globalMouseMonitor {
-      NSEvent.removeMonitor(globalMouseMonitor)
-      self.globalMouseMonitor = nil
-    }
+    QuickAccessPinMouseMonitor.shared.remove(self)
   }
 
   func suspendMouseMonitors() {

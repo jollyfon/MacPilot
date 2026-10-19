@@ -9,6 +9,14 @@ import AppKit
 import Combine
 import Foundation
 
+enum QuickAccessPinZoomAnimation {
+  /// Preserve the former 120 Hz easing duration on 60 Hz and variable-rate screens.
+  static func nextFactor(current: CGFloat, target: CGFloat, elapsed: TimeInterval) -> CGFloat {
+    let fraction = 1 - pow(0.8, max(0, elapsed) * 120)
+    return current + (target - current) * fraction
+  }
+}
+
 /// The single pinned-window model. A pin holds either an image (a screenshot or
 /// a pasted clipboard image) or clipboard text; the text case has no file to
 /// drag out and nothing to zoom, so the chrome adapts via `supportsZoom`.
@@ -21,7 +29,7 @@ final class QuickAccessPinWindowState: ObservableObject {
   @Published private(set) var thumbnail: NSImage?
   @Published private(set) var text: String?
   @Published var isLocked = false
-  @Published var isMouseInside = false
+  @Published private(set) var isMouseInside = false
   /// Corner shape of the pin's own window.  Published because it is drawn twice:
   /// SwiftUI clips the image with it and the AppKit panel shapes its shadow.
   @Published var cornerStyle: ScreenCapturePinCornerStyle = .rounded
@@ -38,13 +46,18 @@ final class QuickAccessPinWindowState: ObservableObject {
   private(set) var maxSize: CGSize
 
   private let absoluteMinimumZoomFactor: CGFloat = 0.4
-  private var zoomInteractionTimer: Timer?
+  private(set) var zoomInteractionTimer: Timer?
   private var zoomInteractionTimerToken: UUID?
 
   /// Image pins can be zoomed; a text pin has no raster to scale.
   var supportsZoom: Bool { image != nil }
 
   var isText: Bool { text != nil }
+
+  func updateMouseInside(_ inside: Bool) {
+    guard isMouseInside != inside else { return }
+    isMouseInside = inside
+  }
 
   /// Image pin. `url` supplies the drag-out file name/extension and may be a
   /// reserved temp path that is only written when the user actually drags.
@@ -123,6 +136,7 @@ final class QuickAccessPinWindowState: ObservableObject {
   }
 
   func updateSizing(baseSize: CGSize, maxSize: CGSize) -> CGSize {
+    guard self.baseSize != baseSize || self.maxSize != maxSize else { return displaySize }
     self.baseSize = baseSize
     self.maxSize = maxSize
     zoomFactor = clampedZoomFactor(zoomFactor)
@@ -130,15 +144,15 @@ final class QuickAccessPinWindowState: ObservableObject {
   }
 
   func updateZoomFactor(_ factor: CGFloat) {
-    zoomFactor = clampedZoomFactor(factor)
+    let clamped = clampedZoomFactor(factor)
+    if zoomFactor != clamped { zoomFactor = clamped }
     markZoomInteraction()
   }
 
   @discardableResult
   private func setZoomFactor(_ factor: CGFloat) -> CGSize {
     guard supportsZoom else { return displaySize }
-    zoomFactor = clampedZoomFactor(factor)
-    markZoomInteraction()
+    updateZoomFactor(factor)
     return displaySize
   }
 
@@ -155,10 +169,12 @@ final class QuickAccessPinWindowState: ObservableObject {
     if !isZoomInteractionLive {
       isZoomInteractionLive = true
     }
-    if let zoomInteractionTimerToken {
-      TimerRegistry.unregister(zoomInteractionTimerToken)
+    if let zoomInteractionTimer {
+      // Extend the same timer through the gesture instead of allocating a
+      // timer, UUID and registry entry on every animation frame.
+      zoomInteractionTimer.fireDate = Date(timeIntervalSinceNow: PinnedScreenshotChromeStyle.zoomHUDIdleInterval)
+      return
     }
-    zoomInteractionTimer?.invalidate()
     let token = UUID()
     let timer = Timer(
       timeInterval: PinnedScreenshotChromeStyle.zoomHUDIdleInterval,

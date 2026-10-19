@@ -124,7 +124,8 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
     private var unlockAttemptTask: Task<Void, Never>?
     private var unlockAttemptSlot = BLEUnlockAttemptSlot()
-    private var unlockSignalTrigger = BLEUnlockSignalTrigger()
+    /// Internal so tests can seed a latched cycle without starting real unlock work.
+    var unlockSignalTrigger = BLEUnlockSignalTrigger()
     private var lastLoggedRSSIAt = Date.distantPast
     private var lastLoggedRSSI: Int?
     private var lastLoggedRSSIErrorAt = Date.distantPast
@@ -859,15 +860,67 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private func resetSignalTimer(for uuid: UUID, minimumDelay: TimeInterval = 0, delayOverride: TimeInterval? = nil) {
         guard let runtime = runtime(for: uuid) else { return }
-        runtime.signalTimer?.stop()
-        runtime.signalTimerGeneration &+= 1
-        let generation = runtime.signalTimerGeneration
         let delay = delayOverride ?? max(TimeInterval(settings.signalTimeout), minimumDelay)
-        runtime.signalTimeoutDeadline = userActivityMonitor.now + delay
+        let now = userActivityMonitor.now
+        let deadline = now + delay
+        runtime.signalTimeoutDeadline = deadline
+
+        // RSSI can arrive several times per second. Keep an earlier armed
+        // wakeup and let it check the renewed deadline, instead of cancelling
+        // and creating a task for every sample. If policy shortens the window,
+        // move the wakeup forward immediately.
+        if let timer = runtime.signalTimer,
+           timer.isRunning,
+           let scheduledDeadline = runtime.signalTimerScheduledDeadline,
+           scheduledDeadline <= deadline {
+            return
+        }
+
+        runtime.signalTimer?.stop()
+        runtime.signalTimer = nil
+        runtime.signalTimerScheduledDeadline = nil
+        runtime.signalTimerGeneration &+= 1
+        scheduleSignalTimer(
+            for: uuid,
+            runtime: runtime,
+            generation: runtime.signalTimerGeneration,
+            delay: delay,
+            deadline: deadline
+        )
+    }
+
+    private func scheduleSignalTimer(
+        for uuid: UUID,
+        runtime: BLEMonitoredDeviceRuntime,
+        generation: UInt64,
+        delay: TimeInterval,
+        deadline: TimeInterval
+    ) {
+        runtime.signalTimerScheduledDeadline = deadline
         runtime.signalTimer = signalTimeoutScheduler(delay) { [weak self, weak runtime] in
             guard let self, let runtime else { return }
             guard self.runtime(for: uuid) === runtime, runtime.signalTimerGeneration == generation else {
                 self.log("signal timeout ignored reason=superseded uuid=\(uuid.uuidString)")
+                return
+            }
+            runtime.signalTimer = nil
+            runtime.signalTimerScheduledDeadline = nil
+            // Each arm gets a distinct generation so even a duplicate callback
+            // from an expired one-shot cannot consume the replacement timer.
+            runtime.signalTimerGeneration &+= 1
+            guard let latestDeadline = runtime.signalTimeoutDeadline else {
+                self.log("signal timeout ignored reason=noDeadline uuid=\(uuid.uuidString)")
+                return
+            }
+            let now = self.userActivityMonitor.now
+            guard now >= latestDeadline else {
+                self.scheduleSignalTimer(
+                    for: uuid,
+                    runtime: runtime,
+                    generation: runtime.signalTimerGeneration,
+                    delay: latestDeadline - now,
+                    deadline: latestDeadline
+                )
                 return
             }
             self.handleMonitoredSignalTimeout(for: uuid)
@@ -876,6 +929,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     func handleMonitoredSignalTimeout(for uuid: UUID) {
         guard let runtime = runtime(for: uuid) else { return }
+        // This method also serves as a deterministic timeout entry point in
+        // tests. Treat a direct call like consuming the currently armed timer.
+        if runtime.signalTimer != nil || runtime.signalTimerScheduledDeadline != nil {
+            runtime.signalTimer?.stop()
+            runtime.signalTimer = nil
+            runtime.signalTimerScheduledDeadline = nil
+            runtime.signalTimerGeneration &+= 1
+        }
         log("signal timeout fired uuid=\(uuid.uuidString) timeout=\(settings.signalTimeout) devicePresence=\(runtime.presence)")
         // Invalidate RSSI immediately, but give discovery one bounded chance
         // before locking. The old code locked first and cancelled a reconnect
@@ -902,6 +963,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         runtime.verifyingSignalLoss = false
         runtime.signalTimeoutDeadline = nil
         runtime.signalTimer = nil
+        runtime.signalTimerScheduledDeadline = nil
         runtime.lastRSSI = nil
         runtime.activeMode = false
         if runtime.presence || confirmedDeparture {
@@ -981,12 +1043,19 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         // across a later lock, have no presence edge to trigger an unlock.
         // Only a new close RSSI sample and a confirmed locked session authorize
         // this route; pairing/retained presence alone never does.
-        if unlockSignalTrigger.allowsAttempt(screenState: screenLockState()),
-           settings.unlockRSSI != Self.unlockDisabled, !settings.wakeWithoutUnlocking,
-           rssi >= settings.unlockRSSI,
-           automaticUnlockAllowed {
-            updatePresence(presence: true, reason: "nearbySignal")
-            if unlockAttemptSlot.isOccupied { unlockSignalTrigger.noteScheduled() }
+        let unlockConditionsAreEligible = settings.unlockRSSI != Self.unlockDisabled
+            && !settings.wakeWithoutUnlocking
+            && rssi >= settings.unlockRSSI
+            && automaticUnlockAllowed
+        // Preserve the missed-notification recovery path: while a lock cycle
+        // is latched, samples still observe the actual state so an unlocked
+        // screen can clear the latch even when the current RSSI is ineligible.
+        if unlockConditionsAreEligible || unlockSignalTrigger.hasScheduledForLock {
+            let triggerAllowsAttempt = unlockSignalTrigger.allowsAttempt(screenState: screenLockState())
+            if unlockConditionsAreEligible && triggerAllowsAttempt {
+                updatePresence(presence: true, reason: "nearbySignal")
+                if unlockAttemptSlot.isOccupied { unlockSignalTrigger.noteScheduled() }
+            }
         }
     }
 

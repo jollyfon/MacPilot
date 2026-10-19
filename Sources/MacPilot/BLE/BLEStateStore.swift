@@ -16,6 +16,7 @@ final class BLEMonitoredDeviceRuntime {
     var proximityTimerGeneration: UInt64 = 0
     var signalTimer: BackgroundTask?
     var signalTimerGeneration: UInt64 = 0
+    var signalTimerScheduledDeadline: TimeInterval?
     var signalTimeoutDeadline: TimeInterval?
     var signalObservationIsContinuous = false
     var verifyingSignalLoss = false
@@ -38,6 +39,7 @@ final class BLEMonitoredDeviceRuntime {
         signalTimer?.stop()
         signalTimer = nil
         signalTimerGeneration &+= 1
+        signalTimerScheduledDeadline = nil
         signalTimeoutDeadline = nil
         signalObservationIsContinuous = false
         verifyingSignalLoss = false
