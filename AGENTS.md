@@ -21,7 +21,7 @@ Contributor guide for **MacPilot**, a native macOS menu-bar app (Swift 6, SwiftP
 
 - `MacPilotLocalPortsCore` stays plain Foundation/Darwin on purpose — no SwiftUI or app-model dependency, so a future CLI can reuse the same identity boundary.
 - `MacPilotPowerIPC` contains only types and pure logic, never privileged operations; `MacPilotPowerHelper` is the root LaunchDaemon that provides the `pmset disablesleep` capability.
-- Dock Groups share one model via `MacPilotDockGroupsCore`: the main app writes config, the helper reads it, tests verify integrity. Every group's helper app reuses a single binary, differentiated only by bundle ID, icon, and name — never touch third-party apps outside that shared model.
+- Dock Groups share one model via `MacPilotDockGroupsCore`: the main app and each group's helper both read and edit it through `DockGroupStore.update` under a cross-process `flock`; the main app alone regenerates helper bundles. Every group's helper app reuses a single binary, differentiated only by bundle ID, icon, and name — never touch third-party apps outside that shared model.
 - `MacPilotFinderSync` uses the `_NSExtensionMain` entry point (built via `Scripts/build-findersync.sh`); SwiftUI is linked explicitly so SwiftUICore reaches the linker through SwiftUI's re-export instead of an autolink entry.
 
 ## Build, Test, and Development Commands
@@ -126,6 +126,17 @@ Everything persisted under `StoredConfiguration` (`config.json` + sidecar files)
 - **New fields must decode tolerantly** — `decodeIfPresent` + default, never a required key; keep the required-key set identical to what the oldest supported release writes.
 - **Section isolation:** `StoredConfiguration.init(from:)` decodes every section through its `section(...)` helper; one unreadable section falls back to that section's defaults and is recorded in `unreadableSections` so `load()` quarantines the raw file before any save. Do not bypass this helper for persisted sections.
 - **The tripwire test** `Tests/MacPilotTests/ConfigurationSchemaContractTests.swift` asserts every persisted type still encodes its historical key set (append-only). A failing contract means your change would strand downgrades — keep the key, don't delete the assertion.
+
+## Dock Groups helper editing (invariant)
+
+The helper panel can add, remove and reorder a group's apps, so the old "main app writes, helper reads" split no longer holds. Both processes edit the same `groups.json`; correctness depends on these rules:
+
+- **Every write goes through `DockGroupStore.update`.** It takes an exclusive `flock` on `<root>/.groups.lock`, re-reads the document, applies the mutation, and writes atomically. Never open-code a read → mutate → `save` in either process: a helper edit made between the read and the save is silently lost. `DockGroupsModel.commit` and `refreshDockTileAnchors` merge into the latest disk document for the same reason.
+- **Only the main app regenerates helper bundles.** After a helper edit, `DockGroupChangeNotifier.post(groupID:)` sends a distributed notification; the main app reloads and regenerates that group's helper so the composite Dock icon follows the members. The helper must never rebuild its own bundle.
+- **Drag payload safety:** reorder drags carry `dockgroup-app:<uuid>` (`DockHelperView.dragPrefix`). Anything that does not match the prefix is not a reorder. The drop index is the final index after the move.
+- **The app picker must not dismiss the panel.** `NSOpenPanel.runModal()` takes key status; `DockHelperPanel.isPresentingModal` suppresses both key-loss and outside-click dismissal until the picker closes, then re-keys the visible panel and resets `DockGroupPanelDismissalPolicy`.
+- Adding/removing members resizes the panel through `DockHelperLayout.size(for:)` + `DockHelperPanelPlacement.resizedOrigin`: a bottom Dock keeps the bottom edge and horizontal center, side Docks keep the vertical center and their Dock-adjacent edge.
+- Validate `DockGroupsCoreTests` and `DockHelperPanelPlacementTests` after touching this path; the concurrency test writes through separate store instances on 40 queues and must lose no changes.
 
 ## Quick Search (invariant)
 

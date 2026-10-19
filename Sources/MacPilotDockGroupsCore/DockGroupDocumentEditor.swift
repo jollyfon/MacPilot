@@ -41,6 +41,23 @@ public enum DockGroupDocumentEditor {
         return true
     }
 
+    /// 把某个 App 直接移动到目标位置（Helper 浮层里「拖到某个图标上」的语义：
+    /// 落点索引就是移动完成后的索引）。位置没变时返回 `false`。
+    @discardableResult
+    public static func moveApp(_ appID: UUID, to index: Int, in groupID: String, in document: inout DockGroupsDocument) -> Bool {
+        guard let groupIndex = document.groups.firstIndex(where: { $0.id == groupID }),
+              let source = document.groups[groupIndex].apps.firstIndex(where: { $0.id == appID }) else {
+            return false
+        }
+        let target = min(max(index, 0), document.groups[groupIndex].apps.count - 1)
+        guard source != target else { return false }
+
+        let app = document.groups[groupIndex].apps.remove(at: source)
+        document.groups[groupIndex].apps.insert(app, at: target)
+        document.groups[groupIndex].updatedAt = DockGroupTimestamp.now()
+        return true
+    }
+
     /// 重命名分组，并保证名称唯一（Helper App 文件名由名称推导）。
     @discardableResult
     public static func rename(groupID: String, to rawName: String, in document: inout DockGroupsDocument) -> String? {

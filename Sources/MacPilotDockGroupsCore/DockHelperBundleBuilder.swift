@@ -16,6 +16,7 @@
 //
 
 import AppKit
+import CryptoKit
 import Foundation
 
 public enum DockHelperBundleError: Error, Equatable, LocalizedError {
@@ -251,7 +252,19 @@ public struct DockHelperBundleBuilder {
             // 记录这张图标是按哪套外观画的。跟随系统时，外观一变这里就和当前外观
             // 对不上，`helperNeedsRegeneration` 据此重建 Helper（`.icns` 没有外观变体）。
             "MacPilotDockGroupIconAppearance": iconAppearance == .dark ? "dark" : "light",
+            // 记录图标是按哪组成员画的：MacPilot 没运行时在 Helper 浮层里增删 /
+            // 排序成员，没人重建这里；下次启动比对这个键就能补上。
+            "MacPilotDockGroupMemberSignature": Self.memberSignature(for: group),
             "MacPilotDockGroupID": group.id
         ]
+    }
+
+    /// 成员指纹：组合图标取前几个成员的图标，成员集合或顺序一变图标就该重画。
+    /// 只包含引用身份（Bundle ID + 路径）与顺序，不读盘、不渲染。
+    public static func memberSignature(for group: DockGroup) -> String {
+        let members = group.apps.map { "\($0.bundleIdentifier ?? "")\u{1F}\($0.path)" }
+        let payload = ([group.id] + members).joined(separator: "\u{1E}")
+        let digest = SHA256.hash(data: Data(payload.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }

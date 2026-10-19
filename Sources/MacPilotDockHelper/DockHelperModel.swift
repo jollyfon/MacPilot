@@ -25,6 +25,7 @@ import AppKit
 import Combine
 import MacPilotDockGroupsCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class DockHelperModel: ObservableObject {
@@ -65,6 +66,12 @@ final class DockHelperModel: ObservableObject {
     private var refreshTimer: Timer?
     /// 每次重新读配置都自增：让上一轮还没跑完的异步加载结果作废。
     private var contentGeneration = 0
+    /// 分组内容变化后通知面板重新计算尺寸。
+    var onGroupChanged: (() -> Void)?
+    /// 打开系统选择面板期间暂停「失去焦点就关闭」的判定，
+    /// 否则用户刚点「+」，浮层就会因为选择面板成为 key window 而消失。
+    var prepareForModalPresentation: (() -> Void)?
+    var modalPresentationDidFinish: (() -> Void)?
 
     init(
         bundleIdentifier: String? = Bundle.main.bundleIdentifier,
@@ -94,19 +101,22 @@ final class DockHelperModel: ObservableObject {
         contentGeneration += 1
         errorMessage = nil
 
-        guard groupID != nil else {
+        guard let groupID else {
             group = nil
             entries = []
             return
         }
         switch store.load() {
         case let .loaded(document):
-            group = groupID.flatMap { document.group(withID: $0) }
+            group = document.group(withID: groupID)
         case .missing, .corrupt:
             group = nil
         }
+        rebuildEntries()
+    }
 
-        // 重新读配置时保留「引用没变」的条目：热进程再次展开时不会闪一下占位图。
+    /// 重新读配置时保留「引用没变」的条目：热进程再次展开时不会闪一下占位图。
+    private func rebuildEntries() {
         let previous = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         entries = (group?.apps ?? []).map { reference in
             var entry = Entry(reference: reference, resolved: nil, icon: nil, iconKey: nil)
@@ -164,6 +174,79 @@ final class DockHelperModel: ObservableObject {
 
     private func iconKey(for app: ResolvedInstalledApp, url: URL) -> String {
         "\(app.bundleIdentifier ?? url.path)@\(app.version ?? "")@\(Int(Self.iconSize))"
+    }
+
+    // MARK: - 编辑分组（写共享配置）
+
+    /// 「+」：系统选择面板里可以一次挑多个 .app；只保存引用。
+    func chooseAppsToAdd() {
+        guard group != nil, groupID != nil else { return }
+        prepareForModalPresentation?()
+        defer { modalPresentationDidFinish?() }
+
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        panel.message = t("chooseApps")
+        panel.prompt = t("add")
+        guard panel.runModal() == .OK else { return }
+
+        for url in panel.urls {
+            addApp(at: url)
+        }
+    }
+
+    @discardableResult
+    func addApp(at url: URL) -> Bool {
+        guard let reference = InstalledAppResolver.makeReference(from: url) else { return false }
+        guard let group, let groupID else { return false }
+        guard !group.apps.contains(where: { DockGroupDocumentEditor.isSameApp($0, reference) }) else {
+            errorMessage = String(format: t("alreadyInGroup"), reference.name)
+            return false
+        }
+        return applyEdit { document in
+            DockGroupDocumentEditor.addApp(reference, to: groupID, in: &document)
+        }
+    }
+
+    /// 右键菜单「从分组移除」：只删除配置里的引用，不碰 App 本身。
+    func removeApp(_ entry: Entry) {
+        guard let groupID else { return }
+        applyEdit { document in
+            DockGroupDocumentEditor.removeApp(entry.id, from: groupID, in: &document)
+        }
+    }
+
+    /// 拖到目标图标上：落点索引就是移动后的索引。
+    func moveApp(id: UUID, to index: Int) {
+        guard let groupID else { return }
+        applyEdit { document in
+            DockGroupDocumentEditor.moveApp(id, to: index, in: groupID, in: &document)
+        }
+    }
+
+    /// 所有修改都走共享 store 的跨进程写锁；保存成功后通知主程序重建 Helper。
+    @discardableResult
+    private func applyEdit(_ mutate: (inout DockGroupsDocument) -> Bool) -> Bool {
+        guard let groupID else { return false }
+        do {
+            guard let document = try store.update(mutate),
+                  let updated = document.group(withID: groupID) else { return false }
+            contentGeneration += 1
+            group = updated
+            rebuildEntries()
+            errorMessage = nil
+            onGroupChanged?()
+            DockGroupChangeNotifier.post(groupID: groupID)
+            startLoadingContent()
+            return true
+        } catch {
+            errorMessage = String(format: t("saveFailed"), error.localizedDescription)
+            return false
+        }
     }
 
     // MARK: - 运行状态轮询（只在浮层显示期间运行）

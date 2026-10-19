@@ -69,7 +69,13 @@ final class DockHelperManager {
 
         // `.icns` 没有外观变体，「跟随系统」只能靠重建 Helper 实现：外观一变，
         // 这里记录的绘制外观就和当前系统对不上。老版本没有这个键，也一并重建。
-        return (plist["MacPilotDockGroupIconAppearance"] as? String) != Self.recordedAppearanceName(for: group)
+        guard (plist["MacPilotDockGroupIconAppearance"] as? String) == Self.recordedAppearanceName(for: group)
+        else { return true }
+
+        // 成员增删 / 排序也会改变组合图标。MacPilot 没运行时这些编辑只落在
+        // groups.json 里（Helper 广播没人收），只能靠这里补一次重建。
+        return (plist["MacPilotDockGroupMemberSignature"] as? String)
+            != DockHelperBundleBuilder.memberSignature(for: group)
     }
 
     /// 分组当前该用哪套外观绘制 Dock 图标（把「跟随系统」解析成浅色或深色）。

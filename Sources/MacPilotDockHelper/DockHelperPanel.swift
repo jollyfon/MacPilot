@@ -68,9 +68,14 @@ final class DockHelperPanelController {
     /// 待命期间的内存压力监听，与 `warmExitTimer` 同生同灭。
     private var pressureSource: DispatchSourceMemoryPressure?
     private let model: DockHelperModel
+    /// 系统选择面板打开期间，浮层会失去 key 状态；那不是「用户点了别处」。
+    private var isPresentingModal = false
 
     init(model: DockHelperModel) {
         self.model = model
+        model.onGroupChanged = { [weak self] in self?.resizePanelToFitGroup() }
+        model.prepareForModalPresentation = { [weak self] in self?.beginModalPresentation() }
+        model.modalPresentationDidFinish = { [weak self] in self?.endModalPresentation() }
     }
 
     /// 浮层当前是否在屏幕上（`main.swift` 用它判断「是 reopen 还是真的需要展开」）。
@@ -252,10 +257,23 @@ final class DockHelperPanelController {
     }
 
     @objc private func panelDidResignKey(_ notification: Notification) {
+        guard !isPresentingModal else { return }
         guard dismissalPolicy?.allowsDismissalForResignKey(now: ProcessInfo.processInfo.systemUptime) == true else {
             return
         }
         dismiss()
+    }
+
+    private func beginModalPresentation() {
+        isPresentingModal = true
+    }
+
+    private func endModalPresentation() {
+        isPresentingModal = false
+        guard let panel, panel.isVisible else { return }
+        // 选择面板关掉后把焦点还给浮层，并重新开始「点外部才关闭」的计时。
+        panel.makeKeyAndOrderFront(nil)
+        dismissalPolicy = DockGroupPanelDismissalPolicy(shownAt: ProcessInfo.processInfo.systemUptime)
     }
 
     // MARK: - 点击外部自动关闭
@@ -269,7 +287,7 @@ final class DockHelperPanelController {
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         ) { [weak self] event in
             Task { @MainActor in
-                guard let self, let panel = self.panel else { return }
+                guard let self, let panel = self.panel, !self.isPresentingModal else { return }
                 // 启动手势的残留（双击的第二下、排队中的旧事件）不算「点了别处」。
                 guard self.dismissalPolicy?
                     .allowsDismissalForOutsideClick(eventTimestamp: event.timestamp) == true
@@ -289,6 +307,29 @@ final class DockHelperPanelController {
     }
 
     // MARK: - 落点
+
+    /// 增删成员后按新内容调整面板尺寸，同时保持浮层当前的锚边不跳走。
+    private func resizePanelToFitGroup() {
+        guard let panel, let group = model.group else { return }
+        let size = DockHelperLayout.size(for: group)
+        let current = panel.frame
+        guard current.size != size else { return }
+
+        let screen = NSScreen.screens.first { $0.frame.intersects(current) }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        let screenFrame = screen?.frame ?? current
+        let visibleFrame = screen?.visibleFrame ?? screenFrame
+        let origin = DockHelperPanelPlacement.resizedOrigin(
+            currentFrame: current,
+            newSize: size,
+            screenFrame: screenFrame,
+            visibleFrame: visibleFrame,
+            pointer: NSEvent.mouseLocation
+        )
+        panel.contentView?.frame = NSRect(origin: .zero, size: size)
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+    }
 
     /// 始终贴在**被点击的那个 Dock 图标**旁边：沿 Dock 方向居中到图标中心，
     /// 垂直于 Dock 的方向紧贴 Dock 内侧（不再跟着鼠标跑）。

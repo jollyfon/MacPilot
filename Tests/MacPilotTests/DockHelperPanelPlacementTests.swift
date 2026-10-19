@@ -168,6 +168,88 @@ struct DockHelperPanelPlacementTests {
         }
     }
 
+    // MARK: - 增删成员后的尺寸调整
+
+    /// 底部 Dock：内容变高时向上长，下边缘贴 Dock 的间距不变，横向中心不动。
+    @Test func resizingAboveABottomDockKeepsTheBottomEdgeAndHorizontalCenter() {
+        let current = CGRect(
+            x: 700,
+            y: bottomDockVisible.minY + DockHelperPanelPlacement.defaultGap,
+            width: panel.width,
+            height: 200
+        )
+        let taller = CGSize(width: panel.width, height: 366)
+        let origin = DockHelperPanelPlacement.resizedOrigin(
+            currentFrame: current,
+            newSize: taller,
+            screenFrame: bottomDockFrame,
+            visibleFrame: bottomDockVisible,
+            pointer: CGPoint(x: current.midX, y: current.minY)
+        )
+        #expect(origin.y == current.minY)
+        #expect(origin.x == current.midX - taller.width / 2)
+    }
+
+    /// 左右 Dock：内容变高时保持纵向中心与贴近 Dock 的那条边。
+    @Test func resizingBesideALeftDockKeepsTheVerticalCenter() {
+        let current = CGRect(
+            x: leftDockVisible.minX + DockHelperPanelPlacement.defaultGap,
+            y: 700,
+            width: panel.width,
+            height: 200
+        )
+        let taller = CGSize(width: panel.width, height: 400)
+        let origin = DockHelperPanelPlacement.resizedOrigin(
+            currentFrame: current,
+            newSize: taller,
+            screenFrame: leftDockFrame,
+            visibleFrame: leftDockVisible,
+            pointer: CGPoint(x: current.minX, y: current.midY)
+        )
+        #expect(origin.x == current.minX)
+        #expect(origin.y == current.midY - taller.height / 2)
+    }
+
+    @Test func resizingBesideARightDockKeepsTheRightEdge() {
+        let current = CGRect(
+            x: rightDockVisible.maxX - DockHelperPanelPlacement.defaultGap - panel.width,
+            y: 300,
+            width: panel.width,
+            height: 200
+        )
+        let wider = CGSize(width: 360, height: 200)
+        let origin = DockHelperPanelPlacement.resizedOrigin(
+            currentFrame: current,
+            newSize: wider,
+            screenFrame: rightDockFrame,
+            visibleFrame: rightDockVisible,
+            pointer: CGPoint(x: current.maxX, y: current.midY)
+        )
+        #expect(origin.x == current.maxX - wider.width)
+        #expect(origin.y == current.midY - wider.height / 2)
+    }
+
+    @Test func resizingStillClampsIntoTheVisibleFrame() {
+        let current = CGRect(
+            x: 0,
+            y: bottomDockVisible.minY + DockHelperPanelPlacement.defaultGap,
+            width: 200,
+            height: 100
+        )
+        let huge = CGSize(width: 1900, height: 900)
+        let origin = DockHelperPanelPlacement.resizedOrigin(
+            currentFrame: current,
+            newSize: huge,
+            screenFrame: bottomDockFrame,
+            visibleFrame: bottomDockVisible,
+            pointer: CGPoint(x: 100, y: current.minY)
+        )
+        #expect(origin.x >= bottomDockVisible.minX)
+        #expect(origin.y >= bottomDockVisible.minY + DockHelperPanelPlacement.edgeMargin)
+        #expect(origin.x + huge.width <= bottomDockFrame.maxX)
+        #expect(origin.y + huge.height <= bottomDockFrame.maxY)
+    }
+
     // MARK: - 有 Dock 图标位置时：只认图标，不认鼠标
 
     /// 真机上「集合」图标的 AX frame（左上角原点）换算成 Cocoa 之后的矩形。

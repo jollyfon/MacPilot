@@ -112,6 +112,39 @@ public enum DockHelperPanelPlacement {
         return origin
     }
 
+    /// 浮层内容变高 / 变宽后（Helper 里增删成员）的新原点。
+    ///
+    /// 不重新跑一遍 `origin(...)`：那时用的是「鼠标现在在哪」，
+    /// 用户正在浮层里操作，鼠标早就不在 Dock 图标上了。这里保持浮层的锚边：
+    /// 底部 Dock 保持下边缘与横向中心，左右 Dock 保持纵向中心与贴近 Dock 的边。
+    public static func resizedOrigin(
+        currentFrame: CGRect,
+        newSize: CGSize,
+        screenFrame: CGRect,
+        visibleFrame: CGRect,
+        pointer: CGPoint,
+        gap: CGFloat = defaultGap,
+        edgeMargin: CGFloat = edgeMargin
+    ) -> CGPoint {
+        let edge = dockEdge(screenFrame: screenFrame, visibleFrame: visibleFrame, pointer: pointer)
+        var origin: CGPoint
+        switch edge {
+        case .left:
+            origin = CGPoint(x: currentFrame.minX, y: currentFrame.midY - newSize.height / 2)
+        case .right:
+            origin = CGPoint(x: currentFrame.maxX - newSize.width, y: currentFrame.midY - newSize.height / 2)
+        case .bottom:
+            let bottom = max(currentFrame.minY, visibleFrame.minY + gap)
+            origin = CGPoint(x: currentFrame.midX - newSize.width / 2, y: bottom)
+        }
+
+        origin.x = clamp(origin.x, lower: visibleFrame.minX + edgeMargin, upper: visibleFrame.maxX - newSize.width - edgeMargin)
+        origin.y = clamp(origin.y, lower: visibleFrame.minY + edgeMargin, upper: visibleFrame.maxY - newSize.height - edgeMargin)
+        origin.x = clamp(origin.x, lower: screenFrame.minX, upper: screenFrame.maxX - newSize.width)
+        origin.y = clamp(origin.y, lower: screenFrame.minY, upper: screenFrame.maxY - newSize.height)
+        return origin
+    }
+
     /// 沿 Dock 方向用来居中的那个坐标：优先图标中心，其次点击点。
     ///
     /// 只有在「这次的点击确实落在 MacPilot 记录的那个图标里」时才相信图标矩形——

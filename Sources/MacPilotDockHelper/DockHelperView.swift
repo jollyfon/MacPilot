@@ -18,6 +18,11 @@ import SwiftUI
 struct DockHelperView: View {
     @ObservedObject var model: DockHelperModel
     @FocusState private var focusedIndex: Int?
+    /// 拖拽中的 App 当前悬停在哪一格（只影响视觉反馈）。
+    @State private var dropTargetID: UUID?
+
+    /// 拖拽载荷前缀：只接受本浮层发出的拖拽，外部普通文本不会被当成排序指令。
+    private static let dragPrefix = "dockgroup-app:"
 
     var body: some View {
         VStack(alignment: .leading, spacing: DockHelperLayout.sectionSpacing) {
@@ -36,7 +41,7 @@ struct DockHelperView: View {
 
     // MARK: - 页头
 
-    /// 只有标题 + 一个设置齿轮：分组图标在这里没有信息量（点开的就是这个分组）。
+    /// 只有标题 + 设置齿轮 + 添加按钮：分组图标在这里没有信息量（点开的就是这个分组）。
     /// 启动失败的提示占用标题右侧的空白，不再单独占一行页脚——页脚那句话和它上面的
     /// 分隔线都是多余的噪声，去掉之后浮层高度也少了一整行。
     private var header: some View {
@@ -48,8 +53,7 @@ struct DockHelperView: View {
             Button {
                 model.openMacPilotSettings()
             } label: {
-                // 只放图标：设置从页脚挪到标题旁，横向空间只够一个小齿轮，
-                // 语义交给下面的 accessibilityLabel。
+                // 只放图标：设置从页脚挪到标题旁，语义交给下面的 accessibilityLabel。
                 Image(systemName: "gearshape")
                     .font(.system(size: 12, weight: .medium))
             }
@@ -57,6 +61,17 @@ struct DockHelperView: View {
             .help(model.t("settings"))
             .accessibilityLabel(model.t("settings"))
             .keyboardShortcut(",", modifiers: .command)
+
+            Button {
+                model.chooseAppsToAdd()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.borderless)
+            .help(model.t("addApps"))
+            .accessibilityLabel(model.t("addApps"))
+            .disabled(model.group == nil)
 
             Spacer(minLength: 8)
 
@@ -162,6 +177,20 @@ struct DockHelperView: View {
         .help(entry.isMissing ? model.t("appMissing") : entry.displayName)
         .accessibilityLabel(entry.isMissing ? "\(entry.displayName) — \(model.t("appMissing"))" : entry.displayName)
         .accessibilityValue(entry.isRunning ? model.t("running") : model.t("notRunning"))
+        .contextMenu {
+            Button(role: .destructive) {
+                model.removeApp(entry)
+            } label: {
+                Label(model.t("removeFromGroup"), systemImage: "minus.circle")
+            }
+        }
+        .draggable(Self.dragPrefix + entry.id.uuidString)
+        .dropDestination(for: String.self) { items, _ in
+            drop(items, onto: entry.id)
+        } isTargeted: { targeted in
+            updateDropTarget(targeted, id: entry.id)
+        }
+        .opacity(dropTargetID == entry.id ? 0.65 : 1)
     }
 
     private func appRow(_ entry: DockHelperModel.Entry, index: Int) -> some View {
@@ -191,6 +220,20 @@ struct DockHelperView: View {
         .onKeyPress(.upArrow) { moveFocus(to: index - 1) }
         .accessibilityLabel(entry.isMissing ? "\(entry.displayName) — \(model.t("appMissing"))" : entry.displayName)
         .accessibilityValue(entry.isRunning ? model.t("running") : model.t("notRunning"))
+        .contextMenu {
+            Button(role: .destructive) {
+                model.removeApp(entry)
+            } label: {
+                Label(model.t("removeFromGroup"), systemImage: "minus.circle")
+            }
+        }
+        .draggable(Self.dragPrefix + entry.id.uuidString)
+        .dropDestination(for: String.self) { items, _ in
+            drop(items, onto: entry.id)
+        } isTargeted: { targeted in
+            updateDropTarget(targeted, id: entry.id)
+        }
+        .opacity(dropTargetID == entry.id ? 0.65 : 1)
     }
 
     @ViewBuilder
@@ -240,5 +283,26 @@ struct DockHelperView: View {
         guard !model.entries.isEmpty else { return .ignored }
         focusedIndex = min(max(index, 0), model.entries.count - 1)
         return .handled
+    }
+
+    /// 拖到某一格上：落点索引就是移动后的索引（拖到最后一项即移到末尾）。
+    private func drop(_ items: [String], onto entryID: UUID) -> Bool {
+        guard let payload = items.first,
+              payload.hasPrefix(Self.dragPrefix),
+              let draggedID = UUID(uuidString: String(payload.dropFirst(Self.dragPrefix.count))),
+              draggedID != entryID,
+              let index = model.entries.firstIndex(where: { $0.id == entryID })
+        else { return false }
+        model.moveApp(id: draggedID, to: index)
+        dropTargetID = nil
+        return true
+    }
+
+    private func updateDropTarget(_ targeted: Bool, id: UUID) {
+        if targeted {
+            dropTargetID = id
+        } else if dropTargetID == id {
+            dropTargetID = nil
+        }
     }
 }

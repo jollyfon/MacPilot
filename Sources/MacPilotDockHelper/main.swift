@@ -7,7 +7,9 @@
 //  这个进程由 MacPilot 生成：同一份 binary 被复制进每个分组的 .app，
 //  只靠 Bundle ID（com.misswell.macpilot.dockgroup.<id>）区分自己是哪一组。
 //
-//  职责严格限制为：读配置 → 显示浮层 → 启动/激活 App → 打开 MacPilot 设置。
+//  职责严格限制为：读配置 → 显示浮层 → 启动/激活 App → 编辑自己分组的成员
+//  （添加 / 移除 / 拖拽排序）→ 打开 MacPilot 设置。
+//  配置编辑只经由共享的 `DockGroupStore.update`（跨进程写锁），只写自己那一组；
 //  不加载外部 dylib、不执行第三方脚本、不运行 shell 命令、不修改任何第三方 App。
 //
 //  生命周期：浮层关掉之后进程继续待命 `DockHelperPanelController.warmLifetime`，
@@ -58,8 +60,8 @@ let application = NSApplication.shared
 // accessory：浮层可以成为 key window，但不会在 Dock / 程序切换器里出现第二个图标。
 application.setActivationPolicy(.accessory)
 
-// 默认读取 MacPilot 的管理目录；`MACPILOT_DOCK_GROUPS_ROOT` 仅用于开发与自动化测试，
-// 只影响「从哪里读配置」，Helper 本身始终没有写入能力。
+// 默认使用 MacPilot 的管理目录；`MACPILOT_DOCK_GROUPS_ROOT` 仅用于开发与自动化测试，
+// 只影响「配置目录在哪里」，所有写入仍然被 `ManagedPathGuard` 限制在这个目录内。
 let groupsRoot: URL = ProcessInfo.processInfo.environment["MACPILOT_DOCK_GROUPS_ROOT"]
     .map { URL(fileURLWithPath: $0, isDirectory: true) }
     ?? DockGroupPaths.defaultRootDirectory()

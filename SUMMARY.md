@@ -2243,3 +2243,17 @@ beta.8 推出去之后没有直接等用户眼睛验收，而是写了一条临�
 尺寸落到 `quickSearch.panelSize`（`QuickSearchPanelSize{width,height}`），`decodeIfPresent`、契约测试补 `panelSize` 键。存过尺寸后，面板高度不再随结果行数变化；从左边/上边拖会同时移动左上角，所以 `rememberPanelFrame` 把尺寸和位置一起提交、只写一次盘，`resetPanelSize()` 只清尺寸不清位置。设置页因此多了一个「回到默认大小」，和「回到默认位置」并排，各自只在有记录时可用。
 
 验证：`swift test --filter "QuickSearch|ConfigurationSchemaContract|ConfigStore"` 205 条 / 28 套件通过；新增真实窗口 + 真实 `NSEvent` 的拖动测试（直接从 SwiftUI 覆盖层里找出缩放视图，证明它挂上了、中心穿透、边框命中、拖 60pt 宽度正好加 60、松手才落盘）。全量 1451 条里 7 条失败，4 条是 AGENTS 已列的主 Actor 饥饿/计时抖动；另外 3 条（文件压缩确认、合盖休眠心跳、远程配对码）单独运行均通过，最终全量耗时 149s，仍是同一类饥饿。全新 Release 带 `-Xswiftc -warnings-as-errors` 通过。⚠️ 需要人眼验收：边框命中宽度（6pt）在触控板上是否顺手、四个角的斜向光标在 macOS 15/14 上的观感，以及拖左边/上边时面板重新布局有没有可感知的闪烁。
+
+## 八十二、Dock 分组：浮层里直接加应用、右键移除、拖动排序（2026-10-19）
+
+需求是给分组浮层补上编辑能力：设置齿轮右边加一个「+」，右键图标可以移出分组，图标之间可以拖动排序。前两件是 UI，第三件要求把「Helper 只读配置」的旧边界改掉——Helper 是独立进程，浮层里改的必须写回同一份 `groups.json`，再由主程序重建 Dock 上的组合图标。
+
+写入改成两边共用的 `DockGroupStore.update`：在管理目录里的 `.groups.lock` 上拿阻塞式 `flock`，锁内重新读盘、应用修改、原子写回。原因是主程序的内存副本可能已经落后：Helper 刚加了一个应用，主程序下一次保存如果直接写自己的副本，就会把这次添加覆盖掉。主程序的 `commit` 与 Dock 图标位置刷新也改走 `update`，40 个队列并发写、每个写不同应用的测试确认一条都没丢。Helper 写完发一条分布式通知（不是打开 URL——那会让浮层失去焦点），主程序收到后重新读配置并重建该分组的 Helper；只有主程序重建 Helper，Helper 不碰自己的 bundle。
+
+「+」打开 `NSOpenPanel`，允许一次选多个 `.app`，只保存引用，重复的应用按 Bundle ID 拒绝并提示。系统选择面板会抢走 key window，所以浮层在 modal 期间挂起「失焦/点外部就关闭」的判定，选择结束后重新成为 key window 并重置关闭计时。「从分组移除」只删配置里的引用，不碰第三方 App。
+
+拖动用 SwiftUI 的 `.draggable` / `.dropDestination`，载荷带 `dockgroup-app:` 前缀和成员 UUID，别的文本不会被当成排序指令；落点索引就是移动后的最终索引。增删成员后面板尺寸会变，用 `DockHelperPanelPlacement.resizedOrigin` 调整：Dock 在下面时保持底边与水平中心，Dock 在侧边时保持垂直中心与贴 Dock 的那条边。
+
+还补了一个容易被忽略的场景：MacPilot 没运行时在浮层里改完成员，没人重建 Helper，Dock 上的组合图标会一直是旧的。Helper 的 Info.plist 因此记录一份成员指纹（Bundle ID + 路径 + 顺序的 SHA-256），启动时的重建校验除版本和外观外也比对这份指纹。
+
+验证：`DockGroupsCoreTests` + `DockHelperPanelPlacementTests` 47 条通过（含 40 队列并发写、拒绝写入不落盘、签名随增删/排序变化）；MacPilot 与 Helper 的 Debug/Release（`-Xswiftc -warnings-as-errors`）构建通过。⚠️ 拖动与系统选择面板的真机手感（触控板拖拽阈值、多选后的浮层重建时机）无法在 CLI 里自动验收，需要装 beta.22 后点一遍。

@@ -25,7 +25,9 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
         (runningTask.isRunning ? 1 : 0) + (dockRefreshTask == nil ? 0 : 1)
             + iconLoadTasks.count + (iconFlushTask == nil ? 0 : 1)
     }
-    var diagnosticObserverCount: Int { workspaceObservers.count + appearanceObservers.count }
+    var diagnosticObserverCount: Int {
+        workspaceObservers.count + appearanceObservers.count + configChangeObservers.count
+    }
     func start() { activateFromConfiguration() }
     func stop() { shutdown() }
     private static let logger = Logger(subsystem: "com.misswell.macpilot", category: "DockGroups")
@@ -50,6 +52,8 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
     private let workspaceObservers = ObserverBag()
     /// 系统深浅外观变化（`.icns` 没有外观变体，只能靠重建 Helper 让 Dock 图标跟上）。
     private let appearanceObservers = ObserverBag()
+    /// Helper 浮层里增删 / 排序成员后发来的变更通知。
+    private let configChangeObservers = ObserverBag()
     /// 外观 / Dock 布局变化后的合并刷新，避免连续通知触发多次重建。
     private var dockRefreshTask: Task<Void, Never>?
     /// 读取 Dock 图标位置的最小间隔：Dock 树的读取要跨进程，别被高频通知打满。
@@ -113,6 +117,7 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
             DiagnosticLog.write("DockGroups", "Removed \(purged) oversized icon thumbnails from the cache.")
         }
         startObservingWorkspace()
+        startObservingConfigChanges()
         ensureHelpersExistIfNeeded()
         scheduleDockRefresh()
     }
@@ -125,6 +130,7 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
         groupIconSignatures.removeAll()
         stopObservingWorkspace()
         stopObservingAppearance()
+        stopObservingConfigChanges()
         dockRefreshTask?.cancel()
         dockRefreshTask = nil
         stopMonitoring()
@@ -385,17 +391,16 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
         invalidateRenderedIcons()
     }
 
-    private func document() -> DockGroupsDocument {
-        DockGroupsDocument(groups: groups)
-    }
-
+    /// 每次编辑都从磁盘上的最新文档出发（Helper 可能刚在浮层里改过），
+    /// 写锁由 `store.update` 持有，主程序的内存副本不会覆盖 Helper 的修改。
     private func commit(_ mutate: (inout DockGroupsDocument) -> Void) {
-        var document = self.document()
-        mutate(&document)
-        groups = document.groups
-        invalidateRenderedIcons()
         do {
-            try store.save(document)
+            guard let updated = try store.update({ document in
+                mutate(&document)
+                return true
+            }) else { return }
+            groups = updated.groups
+            invalidateRenderedIcons()
             configWarning = nil
         } catch {
             configWarning = error.localizedDescription
@@ -607,6 +612,35 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
         appearanceObservers.removeAll()
     }
 
+    /// Helper 也能编辑自己分组的成员（增删 / 排序）。它写完后广播变更，
+    /// 主程序在这里重新读取配置并重建 Helper——Dock 上的组合图标由前四个成员决定。
+    private func startObservingConfigChanges() {
+        guard configChangeObservers.isEmpty else { return }
+        let center = DistributedNotificationCenter.default()
+        configChangeObservers.add(center.addObserver(
+            forName: DockGroupChangeNotifier.notificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            // 只把 Sendable 的 groupID 送进主 actor，Notification 本身不跨隔离域。
+            let changedGroupID = notification.userInfo?[DockGroupChangeNotifier.groupIDKey] as? String
+            Task { @MainActor in
+                self?.handleExternalGroupChange(groupID: changedGroupID)
+            }
+        }, center: center)
+    }
+
+    private func stopObservingConfigChanges() {
+        configChangeObservers.removeAll()
+    }
+
+    private func handleExternalGroupChange(groupID: String?) {
+        guard settings.isEnabled, isActive else { return }
+        reload()
+        guard let groupID, let group = groups.first(where: { $0.id == groupID }) else { return }
+        regenerateHelper(for: group)
+    }
+
     // MARK: - Dock 图标位置
 
     /// 合并刷新：外观变化要重建 Helper，Dock 布局变化要重读图标位置。
@@ -640,24 +674,28 @@ final class DockGroupsModel: ObservableObject, ManagedFeature, FeatureResourceRe
         )
         guard !rects.isEmpty else { return }
 
-        var document = self.document()
-        var updated = 0
-        for index in document.groups.indices {
-            let group = document.groups[index]
-            let path = helperManager.helperAppURL(for: group).standardizedFileURL.path
-            guard let rect = rects[path] else { continue }
-            let tile = DockGroupDockTile(rect: rect)
-            if let existing = group.dockTile, existing.isClose(to: tile) { continue }
-            document.groups[index].dockTile = tile
-            updated += 1
-        }
-        guard updated > 0 else { return }
-
-        groups = document.groups
+        var updatedCount = 0
         do {
-            try store.save(document)
+            // 在写锁内合并到磁盘上的最新文档：Helper 可能刚改过成员顺序，
+            // 这次只更新 dockTile，不能把它的修改一起覆盖掉。
+            let updated = try store.update { document in
+                var updated = 0
+                for index in document.groups.indices {
+                    let group = document.groups[index]
+                    let path = helperManager.helperAppURL(for: group).standardizedFileURL.path
+                    guard let rect = rects[path] else { continue }
+                    let tile = DockGroupDockTile(rect: rect)
+                    if let existing = group.dockTile, existing.isClose(to: tile) { continue }
+                    document.groups[index].dockTile = tile
+                    updated += 1
+                }
+                updatedCount = updated
+                return updated > 0
+            }
+            guard let updated, updatedCount > 0 else { return }
+            groups = updated.groups
             configWarning = nil
-            DiagnosticLog.write("DockGroups", "Published Dock tile anchors for \(updated) group(s)")
+            DiagnosticLog.write("DockGroups", "Published Dock tile anchors for \(updatedCount) group(s)")
         } catch {
             configWarning = error.localizedDescription
             Self.logger.error("Failed to save Dock tile anchors: \(error.localizedDescription, privacy: .public)")

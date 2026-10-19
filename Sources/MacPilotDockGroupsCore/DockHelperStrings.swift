@@ -25,8 +25,13 @@ public enum DockHelperStrings {
 
     private static let chinese: [String: String] = [
         "settings": "设置…",
+        "addApps": "添加应用…",
+        "chooseApps": "选择要添加的应用",
+        "add": "添加",
+        "alreadyInGroup": "「%@」已在分组中",
+        "saveFailed": "无法保存分组：%@",
         "emptyGroup": "这个分组还没有应用",
-        "emptyGroupHint": "打开 MacPilot → Dock 分组，把应用拖进来。",
+        "emptyGroupHint": "点标题旁的 + 选择应用，或打开 MacPilot → Dock 分组添加。",
         "appMissing": "应用未找到",
         "relocate": "重新定位",
         "removeFromGroup": "从分组移除",
@@ -42,8 +47,13 @@ public enum DockHelperStrings {
 
     private static let english: [String: String] = [
         "settings": "Settings…",
+        "addApps": "Add Apps…",
+        "chooseApps": "Choose apps to add",
+        "add": "Add",
+        "alreadyInGroup": "“%@” is already in this group",
+        "saveFailed": "Could not save the group: %@",
         "emptyGroup": "No apps in this group yet",
-        "emptyGroupHint": "Open MacPilot → Dock Groups and drag apps in.",
+        "emptyGroupHint": "Click + next to the title, or open MacPilot → Dock Groups.",
         "appMissing": "App not found",
         "relocate": "Locate…",
         "removeFromGroup": "Remove from group",

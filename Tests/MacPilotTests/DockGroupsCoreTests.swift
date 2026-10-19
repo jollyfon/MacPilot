@@ -71,6 +71,31 @@ struct DockGroupsCoreTests {
         #expect(!url.path.contains(".."))
     }
 
+    /// Helper 的 Info.plist 记录成员指纹：增删 / 排序会改变组合图标，
+    /// MacPilot 没运行时靠它在下次启动补一次重建。
+    @Test func helperMemberSignatureTracksMembershipAndOrder() {
+        let safari = DockGroupApp(bundleIdentifier: "com.apple.Safari", path: "/Applications/Safari.app", name: "Safari")
+        let notes = DockGroupApp(bundleIdentifier: "com.apple.Notes", path: "/Applications/Notes.app", name: "Notes")
+        let preview = DockGroupApp(bundleIdentifier: "com.apple.Preview", path: "/System/Applications/Preview.app", name: "Preview")
+        var group = DockGroup(id: "everyday", name: "Everyday", apps: [safari, notes])
+
+        let baseline = DockHelperBundleBuilder.memberSignature(for: group)
+        #expect(baseline.count == 64)
+        #expect(DockHelperBundleBuilder.memberSignature(for: group) == baseline)
+
+        group.apps.swapAt(0, 1)
+        let reordered = DockHelperBundleBuilder.memberSignature(for: group)
+        #expect(reordered != baseline)
+
+        group.apps.append(preview)
+        #expect(DockHelperBundleBuilder.memberSignature(for: group) != reordered)
+
+        // 同名但不同 ID 的分组生成的是不同的 Helper，指纹也不能撞。
+        let renamed = DockGroup(id: "work", name: "Everyday", apps: group.apps)
+        #expect(DockHelperBundleBuilder.memberSignature(for: renamed)
+            != DockHelperBundleBuilder.memberSignature(for: group))
+    }
+
     // MARK: - Grid 列数
 
     @Test func gridColumnsAdaptToAppCount() {
@@ -119,6 +144,29 @@ struct DockGroupsCoreTests {
         ])
         #expect(DockGroupDocumentEditor.moveApps(in: "dev", from: IndexSet(integer: 0), to: 3, in: &document))
         #expect(document.groups[0].apps.map(\.name) == ["B", "C", "A"])
+    }
+
+    @Test func movingAnAppToATargetIndexUsesTheFinalPosition() {
+        var document = DockGroupsDocument(groups: [
+            DockGroup(id: "dev", name: "Dev", apps: [
+                DockGroupApp(bundleIdentifier: "a", path: "/A.app", name: "A"),
+                DockGroupApp(bundleIdentifier: "b", path: "/B.app", name: "B"),
+                DockGroupApp(bundleIdentifier: "c", path: "/C.app", name: "C"),
+                DockGroupApp(bundleIdentifier: "d", path: "/D.app", name: "D")
+            ])
+        ])
+        let apps = document.groups[0].apps
+        // A 拖到 C 的位置：A 落在索引 2。
+        #expect(DockGroupDocumentEditor.moveApp(apps[0].id, to: 2, in: "dev", in: &document))
+        #expect(document.groups[0].apps.map(\.name) == ["B", "C", "A", "D"])
+        // D 拖到最前。
+        #expect(DockGroupDocumentEditor.moveApp(apps[3].id, to: 0, in: "dev", in: &document))
+        #expect(document.groups[0].apps.map(\.name) == ["D", "B", "C", "A"])
+        // 拖到最后一项 = 移到末尾。
+        #expect(DockGroupDocumentEditor.moveApp(apps[3].id, to: 3, in: "dev", in: &document))
+        #expect(document.groups[0].apps.map(\.name) == ["B", "C", "A", "D"])
+        // 位置没变（C 当前就在索引 1，再拖到 1）不写盘。
+        #expect(!DockGroupDocumentEditor.moveApp(apps[2].id, to: 1, in: "dev", in: &document))
     }
 
     @Test func removingAnAppOnlyDeletesTheReference() {
@@ -207,6 +255,52 @@ struct DockGroupsCoreTests {
         // 损坏后仍然可以重新写入（需求第 16 节：不崩溃、可恢复）。
         try store.save(DockGroupsDocument(groups: [DockGroup(id: "dev", name: "Dev")]))
         #expect(store.load().document.groups.count == 1)
+    }
+
+    /// Helper 与主程序是两条独立的写路径：`update` 必须在锁内重新读取磁盘，
+    /// 否则两边各自拿着旧副本写回时，总有一边的修改会被覆盖。
+    @Test func concurrentUpdatesThroughSeparateStoresRetainEveryChange() throws {
+        let root = try TemporaryDirectory()
+        defer { root.cleanUp() }
+        let bootstrap = DockGroupStore(rootDirectory: root.url)
+        try bootstrap.save(DockGroupsDocument(groups: [DockGroup(id: "dev", name: "Dev")]))
+
+        let updates = 40
+        let group = DispatchGroup()
+        for index in 0..<updates {
+            DispatchQueue.global().async(group: group) {
+                let store = DockGroupStore(rootDirectory: root.url)
+                try? store.update { document in
+                    guard let groupIndex = document.groups.firstIndex(where: { $0.id == "dev" }) else {
+                        return false
+                    }
+                    document.groups[groupIndex].apps.append(
+                        DockGroupApp(bundleIdentifier: "app.\(index)", path: "/Applications/A\(index).app", name: "A\(index)")
+                    )
+                    return true
+                }
+            }
+        }
+        #expect(group.wait(timeout: .now() + 20) == .success)
+
+        let apps = DockGroupStore(rootDirectory: root.url).load().document.groups.first?.apps ?? []
+        #expect(apps.count == updates)
+        #expect(Set(apps.map(\.name)).count == updates)
+    }
+
+    /// `mutate` 拒绝修改时不能顺手覆盖文件；配置损坏时尤其重要（不能因为
+    ///  Helper 打开浮层后什么都没做，就把损坏文件或者别的进程的写入清掉）。
+    @Test func aDeclinedUpdateLeavesTheFileUntouched() throws {
+        let root = try TemporaryDirectory()
+        defer { root.cleanUp() }
+        let store = DockGroupStore(rootDirectory: root.url)
+
+        try FileManager.default.createDirectory(at: root.url, withIntermediateDirectories: true)
+        let corrupt = Data("{ not json".utf8)
+        try corrupt.write(to: store.groupsFileURL)
+
+        #expect(try store.update { _ in false } == nil)
+        #expect(try Data(contentsOf: store.groupsFileURL) == corrupt)
     }
 
     @Test func storeResolvesGroupsByHelperBundleIdentifier() throws {
@@ -318,6 +412,15 @@ struct DockGroupsCoreTests {
     }
 
     // MARK: - 引用构造
+
+    /// Helper 浮层新增的编辑入口在两种语言里都必须有真实文案。
+    @Test func helperStringsCoverTheEditingActionsInBothLanguages() {
+        let keys = ["addApps", "chooseApps", "add", "alreadyInGroup", "saveFailed", "removeFromGroup"]
+        for key in keys {
+            #expect(DockHelperStrings.value(key, language: .simplifiedChinese) != key, "\(key) is missing Chinese")
+            #expect(DockHelperStrings.value(key, language: .english) != key, "\(key) is missing English")
+        }
+    }
 
     @Test func nonAppURLsAreNotAcceptedAsReferences() throws {
         let root = try TemporaryDirectory()
