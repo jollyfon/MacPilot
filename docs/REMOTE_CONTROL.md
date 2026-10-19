@@ -604,15 +604,19 @@ On the Mac, socket readiness and service publication are separate states.
 with both `IncludeP2P` and `IncludeAWDL`. Only a successful registration Add
 callback marks discovery available. This avoids an `NWListener.ready` masking
 an internal advertiser's `PolicyDenied`. Registration failures surface on Home
-and Remote Control; policy rejection offers the Local Network settings entry.
-Enabling Remote Control opens its setup page and explains the first-use system
-permission prompt. A previously allowed app can also receive a policy error
-while macOS updates network privacy rules, so the UI describes the rejected
-operation rather than assuming the user disabled permission. Failed publication
-is retried every three seconds until registration succeeds or the feature stops.
-The retry replaces only the advertisement, preserving the listener, authenticated
-connections, Bluetooth, and paired keys. Success clears pending network guidance.
-No permission reset, app restart, or re-pairing is part of recovery.
+and Remote Control; policy rejection offers the Local Network settings entry and
+a user-triggered **Reopen MacPilot** action. Enabling Remote Control opens its
+setup page and explains the first-use system permission prompt. A previously
+allowed app can also receive a policy error while macOS updates network privacy
+rules, so the UI describes the rejected operation rather than assuming the user
+disabled permission. That includes the post-update case: a -65570 verdict can
+outlive an in-place app replacement until the process is replaced, which is why
+the hint says so explicitly rather than calling the toggle wrong.
+Failed publication is retried every three seconds until registration succeeds or
+the feature stops. The retry replaces only the advertisement, preserving the
+listener, authenticated connections, Bluetooth, and paired keys. Success clears
+pending network guidance. Recovery never resets permissions, restarts the app
+automatically, or re-pairs; the reopen action is only ever taken by the user.
 
 The Bluetooth PSM characteristic is dynamic: it returns the currently published
 channel number, and returns no value after that publication is stopped. The Mac

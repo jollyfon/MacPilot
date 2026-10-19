@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Visible on both Home and Remote Control, including for existing users whose
@@ -13,8 +14,11 @@ struct RemoteLocalNetworkNotice: View {
                     .font(.headline)
                 Text(model.t(hintKey)).font(.subheadline)
                 if server.bonjourStatus == .permissionDenied {
-                    Button(model.t("remoteOpenLocalNetworkSettings")) { Self.openSettings() }
-                        .macPilotProminentButtonStyle()
+                    HStack {
+                        Button(model.t("remoteRelaunchMacPilot")) { Self.relaunch() }
+                            .macPilotProminentButtonStyle()
+                        Button(model.t("remoteOpenLocalNetworkSettings")) { Self.openSettings() }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -35,5 +39,20 @@ struct RemoteLocalNetworkNotice: View {
     static func openSettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork") else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    /// A -65570 denial can outlive an in-place update, so reopen after this process exits.
+    static func relaunch() {
+        let bundleURL = Bundle.main.bundleURL
+        guard bundleURL.pathExtension == "app" else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 1; exec /usr/bin/open -n \"$1\"", "macpilot-relaunch", bundleURL.path]
+        do {
+            try process.run()
+        } catch {
+            return
+        }
+        NSApplication.shared.terminate(nil)
     }
 }
