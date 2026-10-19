@@ -12,7 +12,8 @@ struct QuickSearchPersistenceTests {
         isEnabled: true,
         hotkey: SmartCaptureShortcutBinding(keyCode: 300, modifiers: [.command, .control]),
         fileScope: .indexedDirectories,
-        customDirectoryPaths: ["/Users/me/Documents/项目"]
+        customDirectoryPaths: ["/Users/me/Documents/项目"],
+        panelSize: QuickSearchPanelSize(width: 760, height: 520)
     )
 
     /// 一个「除快速搜索外都齐全」的配置，用来确认新节不会牵连同行的其它节。
@@ -175,6 +176,7 @@ struct QuickSearchPersistenceTests {
 
         // 新字段缺失 = 老配置，按「没拖过、没收藏」处理，不能登记成读不出来。
         #expect(configuration.quickSearch.panelPosition == nil)
+        #expect(configuration.quickSearch.panelSize == nil)
         #expect(configuration.quickSearch.favorites.isEmpty)
         #expect(configuration.quickSearch.isEnabled)
         #expect(configuration.unreadableSections.isEmpty)
@@ -254,6 +256,7 @@ struct QuickSearchPersistenceTests {
         let persistedSection = try #require(features["quickSearch"] as? [String: Any])
         #expect(persistedSection["fileScope"] as? String == "indexedDirectories")
         #expect(persistedSection["customDirectoryPaths"] != nil)
+        #expect((persistedSection["panelSize"] as? [String: Any])?["width"] as? Double == 760)
         #expect(persistedSection["hotkey"] == nil)
         let persistedShortcuts = try #require(shortcuts["quickSearch"] as? [String: Any])
         #expect((persistedShortcuts["hotkey"] as? [String: Any])?["keyCode"] as? Int == 300)

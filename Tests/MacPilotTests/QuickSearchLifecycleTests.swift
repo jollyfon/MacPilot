@@ -2655,6 +2655,83 @@ struct QuickSearchPanelPositionTests {
     }
 }
 
+// MARK: - 面板尺寸
+
+@MainActor
+struct QuickSearchPanelSizeTests {
+    @Test func aResizedPanelRemembersSizeAndPositionInOneWrite() {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        var persistCount = 0
+        harness.model.persist = { persistCount += 1 }
+
+        harness.model.rememberPanelFrame(
+            size: QuickSearchPanelSize(width: 760, height: 520),
+            position: QuickSearchPanelPosition(x: 120, y: 700)
+        )
+        #expect(harness.model.panelSize == QuickSearchPanelSize(width: 760, height: 520))
+        #expect(harness.model.panelPosition == QuickSearchPanelPosition(x: 120, y: 700))
+        // 从左边/上边拖会同时改尺寸与原点：两个字段只写一次盘。
+        #expect(persistCount == 1)
+
+        harness.model.rememberPanelFrame(
+            size: QuickSearchPanelSize(width: 760, height: 520),
+            position: QuickSearchPanelPosition(x: 120, y: 700)
+        )
+        #expect(persistCount == 1)
+    }
+
+    @Test func anUnusableSizeIsRefusedInsteadOfStored() {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        var persistCount = 0
+        harness.model.persist = { persistCount += 1 }
+
+        harness.model.rememberPanelFrame(
+            size: QuickSearchPanelSize(width: .nan, height: 520),
+            position: QuickSearchPanelPosition(x: 120, y: 700)
+        )
+
+        #expect(harness.model.panelSize == nil)
+        #expect(harness.model.panelPosition == nil)
+        #expect(persistCount == 0)
+    }
+
+    @Test func resettingTheSizeLeavesThePositionAndReplacesTheOpenPanel() async {
+        let harness = Harness()
+        await harness.enable(entries: sampleApps)
+        defer { harness.model.shutdown() }
+        harness.model.openPanel()
+        harness.model.rememberPanelFrame(
+            size: QuickSearchPanelSize(width: 760, height: 520),
+            position: QuickSearchPanelPosition(x: 120, y: 700)
+        )
+        guard let panel = harness.lastPanel else {
+            Issue.record("面板没有被创建")
+            return
+        }
+        let placementsBefore = panel.placementCount
+
+        harness.model.resetPanelSize()
+
+        #expect(harness.model.panelSize == nil)
+        // 只清尺寸：用户拖出来的位置还在。
+        #expect(harness.model.panelPosition != nil)
+        #expect(panel.placementCount == placementsBefore + 1)
+    }
+
+    @Test func resettingWithoutARememberedSizeChangesNothing() {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        var persistCount = 0
+        harness.model.persist = { persistCount += 1 }
+
+        harness.model.resetPanelSize()
+
+        #expect(persistCount == 0)
+    }
+}
+
 // MARK: - 收藏与空查询那一屏
 
 @MainActor
@@ -2802,6 +2879,97 @@ struct QuickSearchRealPanelPlacementTests {
         // 回到默认位置：整块面板必须仍在可见区内，不靠具体的居中数值。
         let screen = try #require((panel.screen ?? NSScreen.main)?.visibleFrame)
         #expect(screen.insetBy(dx: -1, dy: -1).contains(panel.frame))
+    }
+
+    @Test func theWindowTakesTheRememberedSizeAndReturnsToTheRowHeightAfterAReset() throws {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        let panel = QuickSearchPanel(model: harness.model, onClose: {})
+        defer { panel.close() }
+        guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else {
+            throw MissingScreenError()
+        }
+
+        let savedSize = QuickSearchPanelSize(width: 760, height: 520)
+        let savedPosition = QuickSearchPanelPosition(x: visible.minX + 40, y: visible.maxY - 40)
+        harness.model.rememberPanelFrame(size: savedSize, position: savedPosition)
+        panel.applyPlacement()
+
+        let expected = QuickSearchPanelLayout.size(rowCount: 0, savedSize: savedSize, visibleFrame: visible)
+        #expect(abs(panel.frame.width - expected.width) < 1)
+        #expect(abs(panel.frame.height - expected.height) < 1)
+        #expect(abs(panel.frame.maxY - savedPosition.y) < 1)
+
+        harness.model.resetPanelSize()
+        panel.applyPlacement()
+
+        #expect(harness.model.panelSize == nil)
+        // 尺寸清掉之后高度重新跟着结果行数走。
+        let rowDrivenHeight = QuickSearchPanelLayout.size(rowCount: 0, visibleFrame: visible).height
+        #expect(abs(panel.frame.height - rowDrivenHeight) < 1)
+    }
+
+    @Test func draggingTheRightBorderResizesAndSavesTheSize() throws {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        let panel = QuickSearchPanel(model: harness.model, onClose: {})
+        defer { panel.close() }
+        guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else {
+            throw MissingScreenError()
+        }
+
+        harness.model.rememberPanelFrame(
+            size: QuickSearchPanelSize(width: 620, height: 420),
+            position: QuickSearchPanelPosition(x: visible.minX + 40, y: visible.maxY - 40)
+        )
+        panel.applyPlacement()
+        panel.contentView?.layoutSubtreeIfNeeded()
+
+        // 直接用 SwiftUI 覆盖层里的那一个，顺带证明它真的挂进了面板、铺满了内容区。
+        let handle = try #require(firstResizeView(in: panel.contentView))
+        #expect(abs(handle.frame.width - panel.contentLayoutRect.width) < 1)
+        #expect(abs(handle.frame.height - panel.contentLayoutRect.height) < 1)
+
+        // 中间的内容区照常穿透，只有边框带接住鼠标。
+        #expect(handle.hitTest(NSPoint(x: handle.frame.midX, y: handle.frame.midY)) == nil)
+        #expect(handle.hitTest(NSPoint(x: handle.frame.maxX - 1, y: handle.frame.midY)) === handle)
+
+        let startFrame = panel.frame
+        let edgePoint = NSPoint(x: startFrame.width - 1, y: startFrame.height / 2)
+        let dragPoint = NSPoint(x: edgePoint.x + 60, y: edgePoint.y)
+        let down = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: edgePoint, modifierFlags: [],
+            timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1
+        ))
+        handle.mouseDown(with: down)
+        let drag = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDragged, location: dragPoint, modifierFlags: [],
+            timestamp: 0.1, windowNumber: panel.windowNumber, context: nil,
+            eventNumber: 2, clickCount: 1, pressure: 1
+        ))
+        handle.mouseDragged(with: drag)
+        #expect(abs(panel.frame.width - (startFrame.width + 60)) < 1)
+
+        let up = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp, location: dragPoint, modifierFlags: [],
+            timestamp: 0.2, windowNumber: panel.windowNumber, context: nil,
+            eventNumber: 3, clickCount: 1, pressure: 0
+        ))
+        handle.mouseUp(with: up)
+
+        // 松手才落盘，且拖右边不改左沿。
+        #expect(abs((harness.model.panelSize?.width ?? 0) - Double(panel.frame.width)) < 1)
+        #expect(abs(panel.frame.minX - startFrame.minX) < 1)
+    }
+
+    private func firstResizeView(in view: NSView?) -> QuickSearchPanelResizeView? {
+        guard let view else { return nil }
+        if let match = view as? QuickSearchPanelResizeView { return match }
+        for subview in view.subviews {
+            if let match = firstResizeView(in: subview) { return match }
+        }
+        return nil
     }
 
     private struct MissingScreenError: Error {}

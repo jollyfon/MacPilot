@@ -97,6 +97,11 @@ struct QuickSearchSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
+                Button(model.t("quickSearchResetSize")) {
+                    quickSearch.resetPanelSize()
+                }
+                // 没调过尺寸就没有可清的记录，按钮这时候说出来的是假可点。
+                .disabled(quickSearch.panelSize == nil)
                 Button(model.t("quickSearchResetPosition")) {
                     quickSearch.resetPanelPosition()
                 }

@@ -78,6 +78,8 @@ struct QuickSearchSettings: Codable, Equatable, Sendable {
     var customDirectoryPaths: [String]
     /// 面板左上角的屏幕坐标；没拖动过时为 nil，沿用默认落点。
     var panelPosition: QuickSearchPanelPosition?
+    /// 拖边框调出来的面板尺寸；nil 表示没调过，高度继续跟着结果行数走。
+    var panelSize: QuickSearchPanelSize?
     /// 用户钉住的收藏，空查询时排在最前。
     var favorites: [QuickSearchFavorite]
     /// 只匹配名称，还是也匹配用途标签。
@@ -94,6 +96,7 @@ struct QuickSearchSettings: Codable, Equatable, Sendable {
         fileScope: QuickSearchFileScope = .home,
         customDirectoryPaths: [String] = [],
         panelPosition: QuickSearchPanelPosition? = nil,
+        panelSize: QuickSearchPanelSize? = nil,
         favorites: [QuickSearchFavorite] = [],
         matchScope: QuickSearchMatchScope = .nameAndPurpose
     ) {
@@ -104,6 +107,7 @@ struct QuickSearchSettings: Codable, Equatable, Sendable {
             URL(fileURLWithPath: $0).standardizedFileURL.path
         })).sorted()
         self.panelPosition = panelPosition
+        self.panelSize = panelSize
         self.favorites = favorites
         self.matchScope = matchScope
     }
@@ -116,7 +120,7 @@ struct QuickSearchSettings: Codable, Equatable, Sendable {
     var matchesPurposeTags: Bool { matchScope == .nameAndPurpose }
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, hotkey, fileScope, customDirectoryPaths, panelPosition, favorites, matchScope
+        case isEnabled, hotkey, fileScope, customDirectoryPaths, panelPosition, panelSize, favorites, matchScope
     }
 
     /// 逐键 `decodeIfPresent`：以后新增字段时旧配置仍可加载（AGENTS.md 不变量）。
@@ -132,6 +136,8 @@ struct QuickSearchSettings: Codable, Equatable, Sendable {
         // 与剪贴板同一做法：坐标只在写入那一步把关（`rememberPanelPosition`），
         // 落盘的必然是有限值，读侧逐键补齐即可。
         panelPosition = try container.decodeIfPresent(QuickSearchPanelPosition.self, forKey: .panelPosition)
+        // 尺寸与位置同一做法：写入侧保证有限值，读侧缺键就沿用「没调过」。
+        panelSize = try container.decodeIfPresent(QuickSearchPanelSize.self, forKey: .panelSize)
         favorites = try container.decodeIfPresent([QuickSearchFavorite].self, forKey: .favorites) ?? []
         // 认不出来的档位（比如用户装过更新的一版再降回来）只影响这一个选择，
         // 不能把收藏、面板位置、快捷键一起带走——那些是 `decodeIfPresent` 存在的理由。

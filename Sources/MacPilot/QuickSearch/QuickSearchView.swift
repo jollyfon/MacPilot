@@ -53,6 +53,9 @@ struct QuickSearchPanelContent: View {
             RoundedRectangle(cornerRadius: QuickSearchPanelLayout.cornerRadius, style: .continuous)
                 .strokeBorder(.white.opacity(0.16), lineWidth: 1)
         }
+        .overlay {
+            QuickSearchPanelResizeHandle()
+        }
         .ignoresSafeArea(.container)
         // 面板是即时出现的浮层：任何布局变化都不该变成整个面板的入场动画。
         .transaction { transaction in
@@ -255,6 +258,145 @@ struct QuickSearchPanelContent: View {
                     .foregroundStyle(.tertiary)
             }
         }
+    }
+}
+
+// MARK: - 边框缩放
+
+/// 铺满面板的透明 AppKit 视图：只有落在 6pt 边框带里的点才命中它，
+/// 其余事件照常穿过，交给输入框和结果列表。
+private struct QuickSearchPanelResizeHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> QuickSearchPanelResizeView { QuickSearchPanelResizeView() }
+    func updateNSView(_ nsView: QuickSearchPanelResizeView, context: Context) {}
+}
+
+final class QuickSearchPanelResizeView: NSView {
+    private var activeEdges: QuickSearchPanelResizeEdges = []
+    private var startFrame: NSRect = .zero
+    private var startMouseLocation: NSPoint = .zero
+    private var resizeBounds: NSRect = .zero
+
+    override var acceptsFirstResponder: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, alphaValue > 0 else { return nil }
+        let localPoint = convert(point, from: superview)
+        guard localPoint.x >= bounds.minX, localPoint.x <= bounds.maxX,
+              localPoint.y >= bounds.minY, localPoint.y <= bounds.maxY else { return nil }
+        return Self.edges(at: localPoint, in: bounds).isEmpty ? nil : self
+    }
+
+    override func resetCursorRects() {
+        let margin = QuickSearchPanelLayout.resizeMargin
+        guard bounds.width > margin * 4, bounds.height > margin * 4 else { return }
+        // 四条边先铺满中段，四个角再各自盖一层：圆角上的光标要是斜向的。
+        addCursorRect(
+            NSRect(x: bounds.minX, y: bounds.minY + margin * 2, width: margin, height: bounds.height - margin * 4),
+            cursor: Self.cursor(for: .left)
+        )
+        addCursorRect(
+            NSRect(x: bounds.maxX - margin, y: bounds.minY + margin * 2, width: margin, height: bounds.height - margin * 4),
+            cursor: Self.cursor(for: .right)
+        )
+        addCursorRect(
+            NSRect(x: bounds.minX + margin * 2, y: bounds.minY, width: bounds.width - margin * 4, height: margin),
+            cursor: Self.cursor(for: .bottom)
+        )
+        addCursorRect(
+            NSRect(x: bounds.minX + margin * 2, y: bounds.maxY - margin, width: bounds.width - margin * 4, height: margin),
+            cursor: Self.cursor(for: .top)
+        )
+        addCursorRect(
+            NSRect(x: bounds.minX, y: bounds.minY, width: margin * 2, height: margin * 2),
+            cursor: Self.cursor(for: [.bottom, .left])
+        )
+        addCursorRect(
+            NSRect(x: bounds.maxX - margin * 2, y: bounds.maxY - margin * 2, width: margin * 2, height: margin * 2),
+            cursor: Self.cursor(for: [.top, .right])
+        )
+        addCursorRect(
+            NSRect(x: bounds.maxX - margin * 2, y: bounds.minY, width: margin * 2, height: margin * 2),
+            cursor: Self.cursor(for: [.bottom, .right])
+        )
+        addCursorRect(
+            NSRect(x: bounds.minX, y: bounds.maxY - margin * 2, width: margin * 2, height: margin * 2),
+            cursor: Self.cursor(for: [.top, .left])
+        )
+    }
+
+    /// 斜向光标是 macOS 15 才公开的 API；14 上退回轴向光标。
+    private static func cursor(for edges: QuickSearchPanelResizeEdges) -> NSCursor {
+        if #available(macOS 15.0, *), let position = frameResizePosition(for: edges) {
+            return NSCursor.frameResize(position: position, directions: .all)
+        }
+        if edges.contains(.left) || edges.contains(.right) { return .resizeLeftRight }
+        return .resizeUpDown
+    }
+
+    @available(macOS 15.0, *)
+    private static func frameResizePosition(
+        for edges: QuickSearchPanelResizeEdges
+    ) -> NSCursor.FrameResizePosition? {
+        if edges == [.top, .left] { return .topLeft }
+        if edges == [.top, .right] { return .topRight }
+        if edges == [.bottom, .left] { return .bottomLeft }
+        if edges == [.bottom, .right] { return .bottomRight }
+        if edges == .left { return .left }
+        if edges == .right { return .right }
+        if edges == .top { return .top }
+        if edges == .bottom { return .bottom }
+        return nil
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        let edges = Self.edges(at: convert(event.locationInWindow, from: nil), in: bounds)
+        guard !edges.isEmpty else { return }
+        activeEdges = edges
+        startFrame = window.frame
+        startMouseLocation = window.convertPoint(toScreen: event.locationInWindow)
+        resizeBounds = (window.screen ?? NSScreen.main)?.visibleFrame ?? startFrame
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let window, !activeEdges.isEmpty else { return }
+        let location = window.convertPoint(toScreen: event.locationInWindow)
+        let delta = NSSize(
+            width: location.x - startMouseLocation.x,
+            height: location.y - startMouseLocation.y
+        )
+        let next = QuickSearchPanelLayout.frameResized(
+            from: startFrame, edges: activeEdges, by: delta, within: resizeBounds
+        )
+        guard next != window.frame else { return }
+        window.setFrame(next, display: true)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard !activeEdges.isEmpty else { return }
+        activeEdges = []
+        (window as? QuickSearchPanel)?.finishBorderResize()
+    }
+
+    private static func edges(at point: NSPoint, in bounds: NSRect) -> QuickSearchPanelResizeEdges {
+        let margin = QuickSearchPanelLayout.resizeMargin
+        var edges: QuickSearchPanelResizeEdges = []
+        if point.x <= bounds.minX + margin {
+            edges.insert(.left)
+        } else if point.x >= bounds.maxX - margin {
+            edges.insert(.right)
+        }
+        if point.y <= bounds.minY + margin {
+            edges.insert(.bottom)
+        } else if point.y >= bounds.maxY - margin {
+            edges.insert(.top)
+        }
+        return edges
     }
 }
 

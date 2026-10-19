@@ -21,6 +21,9 @@ enum QuickSearchPanelLayout {
     /// 默认宽度；屏幕不够宽时按可用宽度收缩。
     static let defaultWidth: CGFloat = 620
     static let minimumWidth: CGFloat = 400
+    static let minimumHeight: CGFloat = 180
+    /// 边框多宽算「拖到了边上」。6pt 与系统窗口的可拖边一致，不抢内容区的点击。
+    static let resizeMargin: CGFloat = 6
     /// 行高固定：键盘导航与滚动位置才可预测。
     static let rowHeight: CGFloat = 40
     static let cornerRadius: CGFloat = 16
@@ -219,10 +222,21 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
             rowCount: model?.results.count ?? 0,
             savedPosition: model?.panelPosition,
             visibleFrames: visibleFrames,
-            preferredFrame: preferred?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
+            preferredFrame: preferred?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900),
+            savedSize: model?.panelSize
         )
         setContentSize(next.size)
         setFrame(next, display: isPresented, animate: false)
+    }
+
+    /// 拖完边框：尺寸和左上角一起记。从左边/上边拖会同时改变两者，
+    /// 只写一次配置，避免两个字段各自落盘。
+    func finishBorderResize() {
+        guard let model else { return }
+        model.rememberPanelFrame(
+            size: QuickSearchPanelSize(size: frame.size),
+            position: QuickSearchPanelPosition(frame: frame)
+        )
     }
 
     /// 顶栏抓手发起的拖动。松手之后才写位置：WindowServer 接管这段拖动，

@@ -2,8 +2,8 @@
 //  QuickSearchPlacementFavoritesTests.swift
 //  MacPilot
 //
-//  面板落点的纯计算，与收藏的纯规则。两边都不开窗、不碰磁盘：
-//  位置算的是 NSRect，收藏算的是数组，全部可以在主 Actor 之外断言。
+//  面板落点、边框缩放的纯计算，与收藏的纯规则。两边都不开窗、不碰磁盘：
+//  位置/尺寸算的是 NSRect，收藏算的是数组，全部可以在主 Actor 之外断言。
 //
 
 import AppKit
@@ -91,6 +91,141 @@ struct QuickSearchPlacementTests {
         let size = QuickSearchPanelLayout.size(rowCount: 4, visibleFrame: narrow)
         #expect(size.width == QuickSearchPanelLayout.minimumWidth)
         #expect(size.width <= narrow.width)
+    }
+
+    // MARK: 记住的尺寸
+
+    @Test func aRememberedSizeStopsTheHeightFromFollowingTheRowCount() {
+        let saved = QuickSearchPanelSize(width: 760, height: 520)
+        let empty = QuickSearchPanelLayout.positionedFrame(
+            rowCount: 0, savedPosition: nil, visibleFrames: [Self.screen],
+            preferredFrame: Self.screen, savedSize: saved
+        )
+        let full = QuickSearchPanelLayout.positionedFrame(
+            rowCount: 20, savedPosition: nil, visibleFrames: [Self.screen],
+            preferredFrame: Self.screen, savedSize: saved
+        )
+        // 用户亲手调的尺寸比「这次有几行」更权威，结果增减都不该再改高度。
+        #expect(empty.size == NSSize(width: 760, height: 520))
+        #expect(full.size == empty.size)
+        #expect(Self.screen.contains(empty))
+    }
+
+    @Test func aRememberedSizeIsClampedToTheMinimumAndTheVisibleScreen() {
+        let tiny = QuickSearchPanelLayout.size(
+            rowCount: 3,
+            savedSize: QuickSearchPanelSize(width: 100, height: 40),
+            visibleFrame: Self.screen
+        )
+        #expect(tiny == NSSize(
+            width: QuickSearchPanelLayout.minimumWidth,
+            height: QuickSearchPanelLayout.minimumHeight
+        ))
+
+        // 换到更小的屏幕（或外接屏拔掉）之后，存下来的尺寸不能超出可见区。
+        let huge = QuickSearchPanelLayout.size(
+            rowCount: 3,
+            savedSize: QuickSearchPanelSize(width: 5_000, height: 5_000),
+            visibleFrame: Self.screen
+        )
+        #expect(huge == NSSize(width: Self.screen.width - 80, height: Self.screen.height - 80))
+    }
+
+    // MARK: 拖边框
+
+    @Test func draggingTheRightEdgeKeepsTheLeftEdgeAndTheHeight() {
+        let start = NSRect(x: 300, y: 400, width: 620, height: 400)
+        let frame = QuickSearchPanelLayout.frameResized(
+            from: start, edges: .right, by: NSSize(width: 120, height: 0), within: Self.screen
+        )
+        #expect(frame.minX == 300)
+        #expect(frame.width == 740)
+        #expect(frame.minY == 400)
+        #expect(frame.height == 400)
+    }
+
+    @Test func draggingTheLeftEdgeKeepsTheRightEdgePinned() {
+        let start = NSRect(x: 300, y: 400, width: 620, height: 400)
+        let frame = QuickSearchPanelLayout.frameResized(
+            from: start, edges: .left, by: NSSize(width: 120, height: 0), within: Self.screen
+        )
+        // 指针向右 120：左沿跟到 420，右沿还是 920。
+        #expect(frame.maxX == start.maxX)
+        #expect(frame.minX == 420)
+        #expect(frame.width == 500)
+    }
+
+    @Test func draggingTheTopEdgeKeepsTheBottomEdgePinned() {
+        let start = NSRect(x: 300, y: 400, width: 620, height: 400)
+        let frame = QuickSearchPanelLayout.frameResized(
+            from: start, edges: .top, by: NSSize(width: 0, height: 90), within: Self.screen
+        )
+        #expect(frame.minY == 400)
+        #expect(frame.height == 490)
+        #expect(frame.width == start.width)
+    }
+
+    @Test func draggingTheBottomEdgeKeepsTheTopEdgePinned() {
+        let start = NSRect(x: 300, y: 400, width: 620, height: 400)
+        let frame = QuickSearchPanelLayout.frameResized(
+            from: start, edges: .bottom, by: NSSize(width: 0, height: 90), within: Self.screen
+        )
+        // 向上拖底边是缩小：上沿（800）不动，底沿从 400 抬到 490。
+        #expect(frame.maxY == start.maxY)
+        #expect(frame.minY == 490)
+        #expect(frame.height == 310)
+    }
+
+    @Test func aCornerDragChangesBothAxesAtOnce() {
+        let start = NSRect(x: 300, y: 400, width: 620, height: 400)
+        let frame = QuickSearchPanelLayout.frameResized(
+            from: start, edges: [.left, .top], by: NSSize(width: -50, height: 40), within: Self.screen
+        )
+        #expect(frame.maxX == start.maxX)
+        #expect(frame.minX == 250)
+        #expect(frame.width == 670)
+        #expect(frame.minY == start.minY)
+        #expect(frame.height == 440)
+    }
+
+    @Test func resizingNeverGoesBelowTheMinimumSize() {
+        let start = NSRect(x: 300, y: 400, width: 620, height: 400)
+        let frame = QuickSearchPanelLayout.frameResized(
+            from: start, edges: [.right, .top], by: NSSize(width: -10_000, height: -10_000),
+            within: Self.screen
+        )
+        #expect(frame.width == QuickSearchPanelLayout.minimumWidth)
+        #expect(frame.height == QuickSearchPanelLayout.minimumHeight)
+        #expect(frame.minX == start.minX)
+        #expect(frame.minY == start.minY)
+    }
+
+    @Test func aResizeIsStoppedByTheVisibleScreenEdge() {
+        let nearRight = NSRect(x: 1_000, y: 500, width: 200, height: 200)
+        let wider = QuickSearchPanelLayout.frameResized(
+            from: nearRight, edges: .right, by: NSSize(width: 1_000, height: 0), within: Self.screen
+        )
+        #expect(wider.maxX == Self.screen.maxX)
+
+        let nearTop = NSRect(x: 300, y: 600, width: 620, height: 250)
+        let taller = QuickSearchPanelLayout.frameResized(
+            from: nearTop, edges: .top, by: NSSize(width: 0, height: 1_000), within: Self.screen
+        )
+        #expect(taller.maxY == Self.screen.maxY)
+
+        let nearLeft = NSRect(x: 50, y: 500, width: 600, height: 200)
+        let leftward = QuickSearchPanelLayout.frameResized(
+            from: nearLeft, edges: .left, by: NSSize(width: -5_000, height: 0), within: Self.screen
+        )
+        #expect(leftward.minX == Self.screen.minX)
+        #expect(leftward.maxX == nearLeft.maxX)
+
+        let nearBottom = NSRect(x: 300, y: 100, width: 620, height: 200)
+        let downward = QuickSearchPanelLayout.frameResized(
+            from: nearBottom, edges: .bottom, by: NSSize(width: 0, height: -5_000), within: Self.screen
+        )
+        #expect(downward.minY == Self.screen.minY)
+        #expect(downward.maxY == nearBottom.maxY)
     }
 }
 

@@ -29,10 +29,52 @@ struct QuickSearchPanelPosition: Codable, Equatable, Sendable {
     var isFinite: Bool { x.isFinite && y.isFinite }
 }
 
+/// 用户拖边框调出来的面板尺寸。nil 表示没调过，高度继续跟着结果行数走。
+struct QuickSearchPanelSize: Codable, Equatable, Sendable {
+    var width: Double
+    var height: Double
+
+    init(size: NSSize) {
+        width = Double(size.width)
+        height = Double(size.height)
+    }
+
+    init(width: Double, height: Double) {
+        self.width = width
+        self.height = height
+    }
+
+    var isFinite: Bool { width.isFinite && height.isFinite }
+}
+
+/// 正在拖的是哪条边/哪个角。角就是两条边的组合。
+struct QuickSearchPanelResizeEdges: OptionSet, Sendable {
+    let rawValue: Int
+
+    static let left = QuickSearchPanelResizeEdges(rawValue: 1 << 0)
+    static let right = QuickSearchPanelResizeEdges(rawValue: 1 << 1)
+    static let bottom = QuickSearchPanelResizeEdges(rawValue: 1 << 2)
+    static let top = QuickSearchPanelResizeEdges(rawValue: 1 << 3)
+
+    var isEmpty: Bool { rawValue == 0 }
+}
+
 extension QuickSearchPanelLayout {
-    /// 面板尺寸完全由「这次有几行结果」和所在屏决定：行高固定，
-    /// 键盘导航与滚动位置才可预测。
-    static func size(rowCount: Int, visibleFrame: NSRect) -> NSSize {
+    /// 没调过尺寸时，面板大小完全由「这次有几行结果」和所在屏决定：行高固定，
+    /// 键盘导航与滚动位置才可预测。调过之后固定用用户给的尺寸。
+    static func size(
+        rowCount: Int,
+        savedSize: QuickSearchPanelSize? = nil,
+        visibleFrame: NSRect
+    ) -> NSSize {
+        let maximumWidth = max(minimumWidth, visibleFrame.width - 80)
+        let maximumHeight = max(minimumHeight, visibleFrame.height - 80)
+        if let savedSize, savedSize.isFinite {
+            return NSSize(
+                width: min(max(CGFloat(savedSize.width), minimumWidth), maximumWidth),
+                height: min(max(CGFloat(savedSize.height), minimumHeight), maximumHeight)
+            )
+        }
         let width = max(minimumWidth, min(defaultWidth, visibleFrame.width - 80))
         let rows = min(CGFloat(rowCount), CGFloat(preferredVisibleRows))
         let contentHeight = headerHeight
@@ -42,7 +84,7 @@ extension QuickSearchPanelLayout {
             + footerHeight
         return NSSize(
             width: width,
-            height: min(max(contentHeight, 180), visibleFrame.height - 80)
+            height: min(max(contentHeight, minimumHeight), visibleFrame.height - 80)
         )
     }
 
@@ -55,10 +97,11 @@ extension QuickSearchPanelLayout {
         rowCount: Int,
         savedPosition: QuickSearchPanelPosition?,
         visibleFrames: [NSRect],
-        preferredFrame: NSRect
+        preferredFrame: NSRect,
+        savedSize: QuickSearchPanelSize? = nil
     ) -> NSRect {
         let position = savedPosition
-        let probeSize = size(rowCount: rowCount, visibleFrame: preferredFrame)
+        let probeSize = size(rowCount: rowCount, savedSize: savedSize, visibleFrame: preferredFrame)
         let probe = position.map {
             NSRect(x: $0.x, y: $0.y - probeSize.height, width: probeSize.width, height: probeSize.height)
         }
@@ -70,7 +113,7 @@ extension QuickSearchPanelLayout {
             }
             ?? preferredFrame
 
-        let size = size(rowCount: rowCount, visibleFrame: visibleFrame)
+        let size = size(rowCount: rowCount, savedSize: savedSize, visibleFrame: visibleFrame)
         let origin: NSPoint
         if let probe {
             origin = probe.origin
@@ -93,6 +136,45 @@ extension QuickSearchPanelLayout {
             width: size.width,
             height: size.height
         )
+    }
+
+    /// 拖某条边/某个角之后的 frame。被拖的边跟手走，对边保持不动：
+    /// 往右拖右边只变宽，往左拖左边则同时改宽度和原点，右沿不跳。
+    /// 尺寸下限与屏幕可见区都在这里收住，拖动过程中不会把面板拖丢。
+    static func frameResized(
+        from frame: NSRect,
+        edges: QuickSearchPanelResizeEdges,
+        by delta: NSSize,
+        within bounds: NSRect
+    ) -> NSRect {
+        var result = frame
+        if edges.contains(.right) {
+            result.size.width = min(
+                max(frame.width + delta.width, minimumWidth),
+                max(minimumWidth, bounds.maxX - frame.minX)
+            )
+        } else if edges.contains(.left) {
+            let width = min(
+                max(frame.width - delta.width, minimumWidth),
+                max(minimumWidth, frame.maxX - bounds.minX)
+            )
+            result.size.width = width
+            result.origin.x = frame.maxX - width
+        }
+        if edges.contains(.top) {
+            result.size.height = min(
+                max(frame.height + delta.height, minimumHeight),
+                max(minimumHeight, bounds.maxY - frame.minY)
+            )
+        } else if edges.contains(.bottom) {
+            let height = min(
+                max(frame.height - delta.height, minimumHeight),
+                max(minimumHeight, frame.maxY - bounds.minY)
+            )
+            result.size.height = height
+            result.origin.y = frame.maxY - height
+        }
+        return result
     }
 
     private static func intersectionArea(_ first: NSRect, _ second: NSRect) -> CGFloat {

@@ -85,10 +85,11 @@ struct ConfigurationSchemaContractTests {
         try assertEncodedKeys(of: settings.panelPosition, supersetOf: ["x", "y"])
     }
 
-    @Test func quickSearchSettingsEncodeEveryHistoricalKeyIncludingPositionAndFavorites() throws {
+    @Test func quickSearchSettingsEncodeEveryHistoricalKeyIncludingPositionSizeAndFavorites() throws {
         var settings = QuickSearchSettings()
         // 可选键在 nil 时不编码，显式赋值才能让它们进入键集（与 AwakeSettings 那条同理）。
         settings.panelPosition = QuickSearchPanelPosition(x: 120, y: 700)
+        settings.panelSize = QuickSearchPanelSize(width: 760, height: 520)
         settings.favorites = [
             QuickSearchFavorite(
                 identity: "bid:com.test.a", path: "/Applications/A.app", kind: .application,
@@ -99,10 +100,11 @@ struct ConfigurationSchemaContractTests {
             of: settings,
             supersetOf: [
                 "isEnabled", "hotkey", "fileScope", "customDirectoryPaths",
-                "panelPosition", "favorites", "matchScope"
+                "panelPosition", "panelSize", "favorites", "matchScope"
             ]
         )
         try assertEncodedKeys(of: settings.panelPosition, supersetOf: ["x", "y"])
+        try assertEncodedKeys(of: settings.panelSize, supersetOf: ["width", "height"])
         try assertEncodedKeys(
             of: settings.favorites.first,
             supersetOf: ["identity", "path", "kind", "title", "subtitle", "bundleIdentifier", "addedAt"]

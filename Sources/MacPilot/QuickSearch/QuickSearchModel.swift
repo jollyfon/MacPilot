@@ -158,6 +158,9 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     /// 记住的面板左上角。nil 表示用户没拖过（或已回到默认位置）。
     var panelPosition: QuickSearchPanelPosition? { settings.panelPosition }
 
+    /// 记住的面板尺寸。nil 表示用户没拖过边框，高度继续跟着结果行数走。
+    var panelSize: QuickSearchPanelSize? { settings.panelSize }
+
     /// 收藏的归并键。视图据此画星标、决定右键菜单写「添加」还是「移除」。
     /// 只有一份真实来源（`settings.favorites`），这里只是把判断做成集合。
     var favoriteIdentities: Set<String> { Set(settings.favorites.map(\.identity)) }
@@ -377,6 +380,24 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     func resetPanelPosition() {
         guard settings.panelPosition != nil else { return }
         settings.panelPosition = nil
+        persist?()
+        panel?.applyPlacement()
+    }
+
+    /// 拖完边框记下尺寸与左上角。从左边/上边拖会同时移动原点，
+    /// 所以两个字段一起提交、只写一次盘；完全没变则不写。
+    func rememberPanelFrame(size: QuickSearchPanelSize, position: QuickSearchPanelPosition) {
+        guard size.isFinite, position.isFinite else { return }
+        guard size != settings.panelSize || position != settings.panelPosition else { return }
+        settings.panelSize = size
+        settings.panelPosition = position
+        persist?()
+    }
+
+    /// 「回到默认大小」：清掉记录的尺寸，高度重新跟着结果行数走。
+    func resetPanelSize() {
+        guard settings.panelSize != nil else { return }
+        settings.panelSize = nil
         persist?()
         panel?.applyPlacement()
     }
