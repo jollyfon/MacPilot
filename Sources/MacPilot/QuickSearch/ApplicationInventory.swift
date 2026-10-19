@@ -29,7 +29,9 @@ struct QuickSearchApplicationEntry: Sendable, Equatable {
         name: String,
         bundleIdentifier: String?,
         alternateNames: [String] = [],
-        tags: [String] = []
+        tags: [String] = [],
+        descriptions: [String] = [],
+        inferredKeywords: [String] = []
     ) {
         let standardized = url.standardizedFileURL
         self.url = standardized
@@ -37,7 +39,13 @@ struct QuickSearchApplicationEntry: Sendable, Equatable {
         self.id = standardized.path
         self.name = name
         self.bundleIdentifier = bundleIdentifier
-        self.fields = QuickSearchSearchFields(title: name, alternateTitles: alternateNames, tags: tags)
+        self.fields = QuickSearchSearchFields(
+            title: name,
+            alternateTitles: alternateNames,
+            tags: tags,
+            description: descriptions.joined(separator: "\n"),
+            extraKeywords: inferredKeywords
+        )
         self.directoryDisplayName = standardized.deletingLastPathComponent().lastPathComponent
     }
 
@@ -272,7 +280,9 @@ final class ApplicationInventory: ObservableObject {
                 name: reference.name,
                 bundleIdentifier: reference.bundleIdentifier,
                 alternateNames: info.alternateNames,
-                tags: QuickSearchAppTagger.tags(for: info.metadata)
+                tags: info.tags,
+                descriptions: info.descriptions,
+                inferredKeywords: info.inferredKeywords
             )
         }
     }

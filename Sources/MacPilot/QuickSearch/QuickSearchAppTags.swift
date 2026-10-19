@@ -145,10 +145,22 @@ enum QuickSearchAppTagger {
 enum QuickSearchAppInfoReader {
     struct Info: Sendable, Equatable {
         let metadata: QuickSearchAppMetadata
-        /// 与 Finder 显示名不同的其他叫法：Info.plist 里未本地化的名字、包目录名。
+        /// 与 Finder 显示名不同的其他叫法：Info.plist 里未本地化的名字、包目录名、
+        /// 本地化 InfoPlist.strings 里的名字、Electron 的 productName。
         /// 用户可能用任意一种来搜（迅雷的包名是 Thunder，本地化显示名是 迅雷）。
         let alternateNames: [String]
+        /// 厂商自己写下的说明：InternetAccessPolicy、CFBundleGetInfoString、
+        /// 服务菜单名、Electron package.json。只用来给词表提供可翻译的原始词。
+        let descriptions: [String]
+        /// 由声明推出的用途标签，建索引时算好，扫描器不再重算。
+        let tags: [String]
+        /// 既没有标签也没有描述时的兜底概念词，来自英/中本地化 UI 字符串。
+        let inferredKeywords: [String]
     }
+
+    /// 描述最多留几条、每条多长：这是搜索词来源，不是要展示的简介。
+    private static let maximumDescriptions = 12
+    private static let maximumDescriptionCharacters = 500
 
     /// 直接读 `Contents/Info.plist`，不走 `Bundle` 的进程内缓存——和
     /// `InstalledAppResolver.freshVersion` 同一个理由：原地升级后要看到新值。
@@ -158,7 +170,13 @@ enum QuickSearchAppInfoReader {
         guard let data = try? Data(contentsOf: plistURL),
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         else {
-            return Info(metadata: QuickSearchAppMetadata(), alternateNames: [])
+            return Info(
+                metadata: QuickSearchAppMetadata(),
+                alternateNames: [],
+                descriptions: [],
+                tags: [],
+                inferredKeywords: []
+            )
         }
 
         var names: [String] = []
@@ -169,14 +187,64 @@ enum QuickSearchAppInfoReader {
         }
         names.append(url.deletingPathExtension().lastPathComponent)
 
-        return Info(
-            metadata: QuickSearchAppMetadata(
-                categoryType: plist["LSApplicationCategoryType"] as? String ?? "",
-                urlSchemes: collect(plist["CFBundleURLTypes"], under: "CFBundleURLSchemes"),
-                contentTypes: collect(plist["CFBundleDocumentTypes"], under: "LSItemContentTypes")
-            ),
-            alternateNames: names
+        let resources = url.appendingPathComponent("Contents/Resources", isDirectory: true)
+        let localized = QuickSearchVendorMetadataReader.localizedInfo(fromAppAt: url)
+        names.append(contentsOf: localized.names)
+
+        var descriptions = localized.descriptions
+        if let policy = QuickSearchVendorMetadataReader.internetAccessPolicyDescription(fromAppAt: url) {
+            descriptions.append(policy)
+        }
+        if let getInfo = QuickSearchVendorMetadataReader.descriptiveGetInfoString(from: plist) {
+            descriptions.append(getInfo)
+        }
+        descriptions.append(contentsOf: QuickSearchVendorMetadataReader.serviceNames(from: plist))
+        if let electron = QuickSearchElectronMetadataReader.read(fromResourcesAt: resources) {
+            if let productName = electron.productName { names.append(productName) }
+            descriptions.append(contentsOf: electron.descriptions)
+        }
+
+        let metadata = QuickSearchAppMetadata(
+            categoryType: plist["LSApplicationCategoryType"] as? String ?? "",
+            urlSchemes: collect(plist["CFBundleURLTypes"], under: "CFBundleURLSchemes"),
+            contentTypes: collect(plist["CFBundleDocumentTypes"], under: "LSItemContentTypes")
         )
+        let tags = QuickSearchAppTagger.tags(for: metadata)
+        let cappedDescriptions = capped(descriptions)
+        let inferredKeywords = tags.isEmpty && cappedDescriptions.isEmpty
+            ? QuickSearchVendorMetadataReader.fallbackKeywords(fromAppAt: url)
+            : []
+
+        return Info(
+            metadata: metadata,
+            alternateNames: deduplicated(names),
+            descriptions: cappedDescriptions,
+            tags: tags,
+            inferredKeywords: inferredKeywords
+        )
+    }
+
+    private static func capped(_ descriptions: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for description in descriptions {
+            let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let folded = QuickSearchTextNormalizer.fold(trimmed)
+            guard seen.insert(folded).inserted else { continue }
+            result.append(String(trimmed.prefix(maximumDescriptionCharacters)))
+            if result.count >= maximumDescriptions { break }
+        }
+        return result
+    }
+
+    private static func deduplicated(_ names: [String]) -> [String] {
+        var seen = Set<String>()
+        return names.filter { name in
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return false }
+            return seen.insert(QuickSearchTextNormalizer.fold(trimmed)).inserted
+        }
     }
 
     /// `[[String: Any]]` 里取出某个字符串数组字段并合并；结构不对就当没有。

@@ -28,8 +28,8 @@ struct QuickSearchResult: Identifiable, Hashable, Sendable {
     /// Spotlight 给出的内容类型标识符（`public.pdf` 之类），应用为 nil。
     let contentTypeIdentifier: String?
     let modificationDate: Date?
-    /// 靠用途标签命中时命中的标签（「下载」「图片」）。名称命中的结果是空数组，
-    /// 面板据此在行上说明这一条为什么会出现在这里。
+    /// 靠用途标签或厂商描述命中时命中的词（「下载」「图片」「AI Agent」）。
+    /// 名称命中的结果是空数组，面板据此在行上说明这一条为什么会出现在这里。
     let matchedTagTerms: [String]
 
     var isFolder: Bool { kind == .folder }

@@ -162,7 +162,7 @@ struct QuickSearchPanelContent: View {
                                 isFavorite: model.favoriteIdentities.contains(result.favoriteIdentity),
                                 favoriteLabel: favoriteLabel,
                                 categoryLabel: model.t(result.categoryKey),
-                                // 用途命中没有名称上的理由可说，就把命中的标签放到
+                                // 用途或描述命中没有名称上的理由可说，就把命中的词放到
                                 // 本来表示类别的那枚标签上：这一条为什么出现，一眼看得见。
                                 purposeLabel: result.matchedTagTerms.first
                             ) {

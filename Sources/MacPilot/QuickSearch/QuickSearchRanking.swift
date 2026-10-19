@@ -43,11 +43,13 @@ struct QuickSearchTagTerm: Sendable, Equatable {
 
     init(_ display: String) {
         self.display = display
-        self.folded = QuickSearchTextNormalizer.fold(display)
+        // 标签与关键词按「只留字母数字」比对：`AI Agent` 与 `aiagent` 是同一个词，
+        // 用户输入里的空格/连字符不该决定命中与否。
+        self.folded = QuickSearchTextNormalizer.compact(display)
     }
 }
 
-/// 一条结果在索引阶段算好的全部可搜索形式：名称的各个叫法 + 用途标签。
+/// 一条结果在索引阶段算好的全部可搜索形式：名称的各个叫法 + 用途标签 + 描述关键词。
 struct QuickSearchSearchFields: Sendable, Equatable {
     /// 名称字段，第一个就是列表里显示的那个。同一个应用往往有两个名字：Finder
     /// 显示的是本地化过的（迅雷），`Info.plist` 里还写着未本地化的（Thunder）。
@@ -56,8 +58,19 @@ struct QuickSearchSearchFields: Sendable, Equatable {
     /// 用途标签。空数组表示这个应用什么标签都没有——不代表它没有用途，
     /// 只是厂商没在 `Info.plist` 里声明过，我们不猜。
     let tags: [QuickSearchTagTerm]
+    /// 厂商写在描述、菜单名或 package.json 里的词，以及词表给出的中英互译。
+    /// 这些词只在名称和用途标签都没命中时才参与排序。
+    let keywords: [QuickSearchTagTerm]
+    /// 描述原文的紧凑形式（去空格与标点），用于中文短语的包含匹配。
+    let compactDescription: String
 
-    init(title: String, alternateTitles: [String] = [], tags: [String] = []) {
+    init(
+        title: String,
+        alternateTitles: [String] = [],
+        tags: [String] = [],
+        description: String = "",
+        extraKeywords: [String] = []
+    ) {
         var built: [QuickSearchNameFields] = []
         var seen = Set<String>()
         for candidate in [title] + alternateTitles {
@@ -66,7 +79,18 @@ struct QuickSearchSearchFields: Sendable, Equatable {
             built.append(fields)
         }
         names = built
-        self.tags = tags.map(QuickSearchTagTerm.init).filter { !$0.folded.isEmpty }
+        let tagTerms = tags.map(QuickSearchTagTerm.init).filter { !$0.folded.isEmpty }
+        self.tags = tagTerms
+        let tagFolded = Set(tagTerms.map(\.folded))
+        let derived = QuickSearchKeywordLexicon.keywords(from: tags + [description])
+        keywords = QuickSearchKeywordLexicon
+            .merging(derived, with: extraKeywords)
+            .filter { !tagFolded.contains(QuickSearchTextNormalizer.compact($0)) }
+            .map(QuickSearchTagTerm.init)
+            .filter { !$0.folded.isEmpty }
+        compactDescription = String(
+            QuickSearchTextNormalizer.compact(description).prefix(400)
+        )
     }
 
     /// 主名称的折叠形式。
@@ -87,6 +111,11 @@ enum QuickSearchTextNormalizer {
         return lowercased.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil)
             .replacingOccurrences(of: "\u{0}", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 只留下字母与数字。标签、关键词、描述短语都用这个形式比对。
+    static func compact(_ string: String) -> String {
+        String(fold(string).filter { $0.isLetter || $0.isNumber })
     }
 
     /// 汉字 → 拉丁（去音调），返回全拼与首字母。
@@ -130,6 +159,9 @@ enum QuickSearchMatchTier: Int, Comparable, Sendable {
     /// 用户要的是名字里带「图」的软件，不是所有被标成「图片」的软件。
     case tag = 6
     case fuzzy = 7
+    /// 只有厂商写的描述命中。它比模糊名称还弱：名字哪怕只对上几个字母，
+    /// 也比「描述里提过这个词」更可能指向用户要找的应用。
+    case keyword = 8
 
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
@@ -140,7 +172,7 @@ struct QuickSearchMatch: Sendable, Equatable {
     let position: Int
     /// 模糊匹配跨过的字符数；非模糊为 0。
     let gap: Int
-    /// 仅 `.tag` 等级有值：命中的标签原样，用来在行上说明命中原因。
+    /// 仅 `.tag` / `.keyword` 等级有值：命中的标签或描述词，用来在行上说明命中原因。
     var matchedTags: [String] = []
 }
 
@@ -169,13 +201,18 @@ enum QuickSearchMatcher {
     ) -> QuickSearchMatch? {
         let needle = fold(query)
         guard !needle.isEmpty else { return nil }
+        let compactNeedle = QuickSearchTextNormalizer.compact(query)
 
         var best: QuickSearchMatch?
         for name in fields.names {
             guard let hit = nameMatch(needle: needle, name: name) else { continue }
             if best == nil || isBetter(hit, than: best!) { best = hit }
         }
-        if includeTags, let hit = tagMatch(needle: needle, tags: fields.tags),
+        if includeTags, let hit = tagMatch(needle: compactNeedle, tags: fields.tags),
+           best == nil || isBetter(hit, than: best!) {
+            best = hit
+        }
+        if includeTags, let hit = keywordMatch(needle: compactNeedle, query: query, fields: fields),
            best == nil || isBetter(hit, than: best!) {
             best = hit
         }
@@ -231,6 +268,50 @@ enum QuickSearchMatcher {
             position: 0,
             gap: 0,
             matchedTags: hit.map(\.display)
+        )
+    }
+
+    /// 描述关键词比用途标签更弱：标签是厂商声明的用途，描述只是提到过。
+    /// 中文短语还可以直接落在描述原文里；拉丁输入不这么做，
+    /// 否则 `ai` 会在 `said`/`email` 里到处命中。
+    private static func keywordMatch(
+        needle: String,
+        query: String,
+        fields: QuickSearchSearchFields
+    ) -> QuickSearchMatch? {
+        guard needle.count >= minimumTagQueryCharacters else { return nil }
+        let allowPrefixHit = !isASCIIALNumeric(needle) || needle.count >= minimumLatinTagPrefixCharacters
+        // quality：0 = 词完全相等，1 = 查询是词的延伸（下载器 → 下载），
+        // 2 = 词以查询开头。行上的说明优先显示最精确的那个词。
+        var hits: [(quality: Int, position: Int, display: String)] = []
+        for (index, term) in fields.keywords.enumerated() {
+            if term.folded == needle {
+                hits.append((0, index, term.display))
+            } else if needle.hasPrefix(term.folded) {
+                hits.append((1, index, term.display))
+            } else if allowPrefixHit, term.folded.hasPrefix(needle) {
+                hits.append((2, index, term.display))
+            }
+        }
+        if hits.isEmpty,
+           needle.rangeOfCharacter(from: QuickSearchTextNormalizer.hanCharacters) != nil,
+           fields.compactDescription.contains(needle) {
+            return QuickSearchMatch(
+                tier: .keyword,
+                position: 0,
+                gap: 0,
+                matchedTags: [query.trimmingCharacters(in: .whitespacesAndNewlines)]
+            )
+        }
+        guard !hits.isEmpty else { return nil }
+        hits.sort { lhs, rhs in
+            lhs.quality != rhs.quality ? lhs.quality < rhs.quality : lhs.position < rhs.position
+        }
+        return QuickSearchMatch(
+            tier: .keyword,
+            position: hits[0].position,
+            gap: 0,
+            matchedTags: hits.map(\.display)
         )
     }
 
