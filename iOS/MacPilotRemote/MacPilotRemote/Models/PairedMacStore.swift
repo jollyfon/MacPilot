@@ -110,6 +110,14 @@ final class PairedMacStore: ObservableObject {
         persist()
     }
 
+    /// Records whether the Mac relies on this phone for BLE proximity. Only
+    /// writes when the answer changes: `upsert` persists the whole list.
+    func setWantsBLEProximity(_ wants: Bool, id: UUID) {
+        guard var mac = mac(id: id), mac.wantsBLEProximity != wants else { return }
+        mac.wantsBLEProximity = wants
+        upsert(mac)
+    }
+
     func markConnected(id: UUID, endpoint: NWEndpointSnapshot, name: String) {
         guard var mac = mac(id: id) else { return }
         mac.name = name

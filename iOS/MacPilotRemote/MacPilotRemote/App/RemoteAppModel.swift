@@ -194,9 +194,7 @@ final class RemoteAppModel: ObservableObject {
         order.move(fromOffsets: source, toOffset: destination)
         store.setConnectionPriority(order)
         pruneCandidates()
-        if connection.isReady, connection.transportKind != .bluetooth, !shouldTry(.bluetooth) {
-            stopBLEFallback()
-        }
+        reconcileBLEAdvertising()
         restartConnectSupervisor()
     }
 
@@ -363,11 +361,14 @@ final class RemoteAppModel: ObservableObject {
             cancelAutomaticMacSwitchTask()
             stopConnectSupervisor()
             finishBLEIdentityProbe()
-            stopBLEFallback()
             cancelCandidates()
             connection.disconnect(report: false)
             authenticatedDeviceID = nil
             connectionState = hasEverConnected ? .reconnecting : .idle
+            // A Mac with an explicit BLE Unlock binding still needs this
+            // phone's advertisement while PilotNest is away; the reconcile
+            // keeps it only for that case and stops every other path.
+            reconcileBLEAdvertising()
         default:
             break
         }
@@ -548,16 +549,39 @@ final class RemoteAppModel: ObservableObject {
 
     // MARK: - Bluetooth path
 
-    /// Advertise while disconnected or while Bluetooth can improve the current link.
+    /// Re-advertise after a state change. Advertising is no longer a purely
+    /// foreground concern: a paired Mac that advertised `bleIdentityLearning`
+    /// scans for this phone for proximity unlock and needs it to remain
+    /// discoverable after PilotNest leaves the foreground or a network link
+    /// wins the race.
     private func startBLEFallback() {
-        guard manualTarget == nil, isForeground, shouldTry(.bluetooth) else { return }
-        ble.start()
-        bleFallbackAdvertising = ble.isAdvertising
+        reconcileBLEAdvertising()
     }
 
+    /// Stops the peripheral unconditionally. Only a target reset uses this;
+    /// ordinary lifecycle changes go through `reconcileBLEAdvertising`.
     private func stopBLEFallback() {
         ble.stop()
         bleFallbackAdvertising = false
+    }
+
+    private func reconcileBLEAdvertising(keepingActiveBLESession: Bool = false) {
+        let keepsBLESession = keepingActiveBLESession
+            || (connection.isReady && connection.transportKind == .bluetooth)
+        let advertise = RemoteBLEAdvertisingPolicy.shouldAdvertise(
+            isForeground: isForeground,
+            wantsProximity: store.pairedMacs.contains { $0.wantsBLEProximity == true },
+            isIdentityProbeActive: isBLEIdentityProbeActive,
+            hasManualTarget: manualTarget != nil,
+            bluetoothIsNeededForRace: shouldTry(.bluetooth),
+            keepsActiveBLESession: keepsBLESession
+        )
+        if advertise {
+            ble.start()
+        } else if ble.isRunning {
+            ble.stop()
+        }
+        bleFallbackAdvertising = ble.isAdvertising
     }
 
     /// Runs one short BLE authentication window after an associated Mac has
@@ -640,12 +664,7 @@ final class RemoteAppModel: ObservableObject {
             removeCandidate(manager)
         }
         if wasActive {
-            if keepingBLESessionAlive {
-                bleFallbackAdvertising = ble.isAdvertising
-            } else {
-                ble.stop()
-                bleFallbackAdvertising = false
-            }
+            reconcileBLEAdvertising(keepingActiveBLESession: keepingBLESessionAlive)
         }
     }
 
@@ -654,6 +673,14 @@ final class RemoteAppModel: ObservableObject {
     /// identity-only candidate and can never become the control session.
     private func adoptBLEChannel(_ channel: CBL2CAPChannel) {
         bleFallbackAdvertising = ble.isAdvertising
+        // The peripheral deliberately keeps advertising in the background for
+        // proximity, but a control session belongs to the foreground: the app
+        // has already closed its network links and there is no UI to drive it.
+        guard isForeground else {
+            bleLog("BLE channel declined: the app is in the background")
+            close(channel)
+            return
+        }
         let isIdentityProbeChannel = RemoteBLEIdentityProbePolicy.shouldAcceptChannel(
             isForeground: isForeground,
             isProbeWindowActive: isBLEIdentityProbeActive,
@@ -1112,14 +1139,10 @@ final class RemoteAppModel: ObservableObject {
             metrics.connectLatencyMs = pending.connect
             metrics.handshakeLatencyMs = pending.handshake
         }
-        // A working link makes Bluetooth redundant, and an idle advertisement
-        // only costs both devices power. The exception is Bluetooth itself: the
-        // L2CAP channel belongs to the peripheral, so stopping the peripheral
-        // while it is the link carrying this session would close the stream we
-        // just connected with.
-        if connection.transportKind != .bluetooth && !shouldTry(.bluetooth) {
-            stopBLEFallback()
-        }
+        // A working link makes Bluetooth redundant, but an advertisement is not
+        // just a fallback: a Mac that advertised `bleIdentityLearning` scans for
+        // this phone to run BLE Unlock. Persist that intent and let the
+        // reconciler decide, instead of stopping the radio on every network win.
         connectionState = .connected
         errorKey = nil
         pairingPrompt = nil
@@ -1128,6 +1151,7 @@ final class RemoteAppModel: ObservableObject {
         // existing entry. Pairing itself writes nothing here, so a Mac would
         // otherwise stay listed as new forever and never become the default.
         store.ensurePaired(id: deviceID, name: name)
+        store.setWantsBLEProximity(connection.supportsBLEIdentityLearning, id: deviceID)
         if let enteredAddress, var mac = store.mac(id: deviceID) {
             mac.manualHost = enteredAddress.host
             mac.manualPort = enteredAddress.port
@@ -1152,6 +1176,7 @@ final class RemoteAppModel: ObservableObject {
         }
         startConnectSupervisor()
         startBLEIdentityProbeIfNeeded()
+        reconcileBLEAdvertising()
         updateAutomaticMacSelection()
     }
 

@@ -54,6 +54,10 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     /// off and nothing was being advertised at all.
     var isAdvertising: Bool { isOnAir }
 
+    /// Whether the peripheral is meant to be running. Ordinary state changes
+    /// use this to avoid tearing an already-stopped peripheral down again.
+    var isRunning: Bool { wantsToRun }
+
     // MARK: - Lifecycle
 
     func start() {

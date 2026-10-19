@@ -37,9 +37,20 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     private var manager: CBCentralManager?
     private var peripheral: CBPeripheral?
     private var psmCharacteristic: CBCharacteristic?
+    private var identityClaimCharacteristic: CBCharacteristic?
     /// Claims waiting for a matching advertisement, keyed by the random token.
     /// A claim is single use and expires with the phone's probe window.
     private var pendingIdentityClaims: [Data: PendingIdentityClaim] = [:]
+    /// Re-reads the identity characteristic for a bounded time. The phone only
+    /// writes the token after it receives the acknowledgement for the claim
+    /// command, so the first read on an already-open link can legitimately
+    /// arrive before the value is armed.
+    private var identityClaimReadTask: Task<Void, Never>?
+    /// A channel was opened for this peripheral; tearing the GATT link down
+    /// would close the L2CAP stream that carries the control session.
+    private var deliveredChannel = false
+    /// An L2CAP open is between the PSM read and its callback.
+    private var isOpeningChannel = false
     private var isScanning = false
     private var wantsToRun = false
     private var attemptWatchdog: Task<Void, Never>?
@@ -96,6 +107,8 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         retryTask?.cancel()
         retryTask = nil
         channelOpenRetryPolicy = RemoteBLEChannelOpenRetryPolicy()
+        identityClaimReadTask?.cancel()
+        identityClaimReadTask = nil
         isScanning = false
         manager?.stopScan()
         if let peripheral {
@@ -103,6 +116,9 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         }
         peripheral = nil
         psmCharacteristic = nil
+        identityClaimCharacteristic = nil
+        deliveredChannel = false
+        isOpeningChannel = false
         pendingIdentityClaims.removeAll()
         // Release the radio session as well. Keeping the manager alive after the
         // feature is switched off would leave an idle CBCentralManager, its
@@ -140,12 +156,49 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
             expiresAt: Date().addingTimeInterval(bounded)
         )
         onLog?("BLE identity claim registered validity=\(Int(bounded))s; reading the claim on discovery")
-        armForIdentityProbe()
+        if wantsToRun, let peripheral, peripheral.state == .connected,
+           identityClaimCharacteristic != nil {
+            // A control session may already own this link. Read the claim on
+            // it instead of waiting for a disconnect that never comes.
+            beginIdentityClaimReadLoop(on: peripheral)
+        } else {
+            armForIdentityProbe()
+        }
     }
 
     private func pruneExpiredIdentityClaims() {
         let now = Date()
         pendingIdentityClaims = pendingIdentityClaims.filter { $0.value.expiresAt > now }
+    }
+
+    /// Reads the identity characteristic a few times while a claim is pending.
+    /// The phone serves the token only after it has acknowledged the claim
+    /// command, so a single immediate read races that write and would drop the
+    /// learning for this entire connection.
+    private func beginIdentityClaimReadLoop(on peripheral: CBPeripheral) {
+        identityClaimReadTask?.cancel()
+        identityClaimReadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for attempt in 0..<6 {
+                guard !Task.isCancelled, self.wantsToRun,
+                      self.peripheral === peripheral,
+                      peripheral.state == .connected,
+                      let characteristic = self.identityClaimCharacteristic,
+                      !self.pendingIdentityClaims.isEmpty else {
+                    self.identityClaimReadTask = nil
+                    return
+                }
+                self.onLog?("BLE reading identity claim on the open link uuid=\(peripheral.identifier.uuidString) attempt=\(attempt + 1)")
+                peripheral.readValue(for: characteristic)
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    self.identityClaimReadTask = nil
+                    return
+                }
+            }
+            self.identityClaimReadTask = nil
+        }
     }
 
     // MARK: - Discovery
@@ -189,6 +242,8 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     private func resetAttempt() {
         attemptWatchdog?.cancel()
         attemptWatchdog = nil
+        identityClaimReadTask?.cancel()
+        identityClaimReadTask = nil
         isScanning = false
         manager?.stopScan()
         if let peripheral {
@@ -196,6 +251,9 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         }
         peripheral = nil
         psmCharacteristic = nil
+        identityClaimCharacteristic = nil
+        deliveredChannel = false
+        isOpeningChannel = false
         beginScanningIfPossible()
     }
 
@@ -301,14 +359,16 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
             return
         }
         psmCharacteristic = characteristic
+        identityClaimCharacteristic = service.characteristics?.first(
+            where: { $0.uuid == RemoteBLEService.identityClaimCharacteristicUUID }
+        )
         pruneExpiredIdentityClaims()
         if !pendingIdentityClaims.isEmpty,
-           let claimCharacteristic = service.characteristics?.first(where: { $0.uuid == RemoteBLEService.identityClaimCharacteristicUUID }) {
+           identityClaimCharacteristic != nil {
             // Identity before channel: the claim is why this attempt exists,
             // and opening L2CAP for a phone that is merely claiming identity
             // would pay for a handshake this Mac does not need.
-            onLog?("BLE reading identity claim uuid=\(peripheral.identifier.uuidString)")
-            peripheral.readValue(for: claimCharacteristic)
+            beginIdentityClaimReadLoop(on: peripheral)
             return
         }
         peripheral.readValue(for: characteristic)
@@ -320,13 +380,26 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         error: Error?
     ) {
         guard wantsToRun, self.peripheral === peripheral else { return }
+        if characteristic.uuid == RemoteBLEService.identityClaimCharacteristicUUID {
+            if let error {
+                onLog?("BLE identity claim read failed uuid=\(peripheral.identifier.uuidString) error=\(error.localizedDescription); continuing with L2CAP")
+            } else if let data = characteristic.value {
+                handleIdentityClaimValue(data, peripheral: peripheral)
+                return
+            }
+            // A failed claim read must not tear down the link an active L2CAP
+            // session depends on; fall through to the fallback path instead.
+            guard !deliveredChannel, !isOpeningChannel else { return }
+            if let psmCharacteristic {
+                peripheral.readValue(for: psmCharacteristic)
+            } else {
+                resetAttempt()
+            }
+            return
+        }
         guard error == nil, let data = characteristic.value else {
             onLog?("BLE characteristic read failed uuid=\(peripheral.identifier.uuidString) error=\(error?.localizedDescription ?? "no value")")
             resetAttempt()
-            return
-        }
-        if characteristic.uuid == RemoteBLEService.identityClaimCharacteristicUUID {
-            handleIdentityClaimValue(data, peripheral: peripheral)
             return
         }
         guard characteristic.uuid == RemoteBLEService.psmCharacteristicUUID,
@@ -336,6 +409,7 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
             return
         }
         onLog?("BLE opening L2CAP channel psm=\(psm)")
+        isOpeningChannel = true
         peripheral.openL2CAPChannel(psm)
     }
 
@@ -348,6 +422,9 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
             RemoteCrypto.constantTimeEquals($0.key, token)
         }) else {
             onLog?("BLE identity claim mismatch uuid=\(peripheral.identifier.uuidString); continuing with L2CAP")
+            // The read loop keeps trying while a claim is pending, so an empty
+            // value here can simply mean the phone has not armed it yet.
+            guard !deliveredChannel, !isOpeningChannel else { return }
             if let psmCharacteristic {
                 peripheral.readValue(for: psmCharacteristic)
             } else {
@@ -356,12 +433,18 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
             return
         }
         pendingIdentityClaims.removeValue(forKey: match.key)
+        identityClaimReadTask?.cancel()
+        identityClaimReadTask = nil
         let claim = match.value
         onLog?("BLE identity claim matched uuid=\(peripheral.identifier.uuidString); peripheral identity learned")
         onIdentityClaim?(peripheral.identifier, claim.clientID, claim.keyFingerprint)
-        // The phone stops claiming once the Mac has read the token, but the
-        // remote-control fallback still needs a scan running for the next time
-        // the network goes away.
+        // The phone stops claiming once the Mac has read the token. When this
+        // GATT link already carries an L2CAP control session, keep it alive;
+        // cancelling the peripheral would close that stream too.
+        guard !deliveredChannel, !isOpeningChannel else {
+            onLog?("BLE keeping the open L2CAP link after identity learning")
+            return
+        }
         resetAttempt()
     }
 
@@ -385,6 +468,8 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         // so tearing the peripheral down would close the stream with it.
         attemptWatchdog?.cancel()
         attemptWatchdog = nil
+        isOpeningChannel = false
+        deliveredChannel = true
         channelOpenRetryPolicy.recordOpenSuccess()
         onLog?("BLE L2CAP channel open")
         onChannel?(channel, peripheral.identifier)
@@ -403,6 +488,8 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
     private func scheduleRetryAfterChannelOpenFailure(delay: TimeInterval) {
         attemptWatchdog?.cancel()
         attemptWatchdog = nil
+        identityClaimReadTask?.cancel()
+        identityClaimReadTask = nil
         isScanning = false
         manager?.stopScan()
         if let peripheral {
@@ -410,6 +497,9 @@ final class RemoteBLECentral: NSObject, @preconcurrency CBCentralManagerDelegate
         }
         peripheral = nil
         psmCharacteristic = nil
+        identityClaimCharacteristic = nil
+        deliveredChannel = false
+        isOpeningChannel = false
 
         retryTask?.cancel()
         retryTask = Task { @MainActor [weak self] in

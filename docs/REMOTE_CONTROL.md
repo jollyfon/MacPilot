@@ -846,6 +846,23 @@ Probes stop on foreground-window expiry, authentication completion or background
 The L2CAP path introduces no commands; `claimBLEIdentity` is the one optional,
 capability-gated command on the GATT path.
 
+When the Mac advertises `bleIdentityLearning` (that is, it holds an explicit BLE
+Unlock binding for this phone), PilotNest persists that proximity intent and
+keeps the peripheral advertising after the app is backgrounded and after a
+network transport wins the race. The advertisement is what the Mac's BLE Unlock
+central rediscovers after a link drop; there is no advertisement callback to
+recover from otherwise. An L2CAP control channel is still accepted only in the
+foreground. iOS moves service UUIDs to the overflow area for background
+advertisements, so the BLE Unlock scan (unfiltered) can still see the phone while
+the remote-control BLE central (service-filtered) cannot; that central remains a
+foreground fallback. If the system suspends the app or the user force-quits it,
+no CoreBluetooth advertisement survives.
+
+The Mac also reads `claimBLEIdentity` on an already-open GATT link and re-reads
+the characteristic a few times while the claim is pending, because the phone
+arms the token slightly after acknowledging the command. A matched claim never
+cancels a link that already carries an L2CAP control session.
+
 At most eight learned aliases are retained per logical device, evicting the
 least-recently authenticated alias. Duplicate observations update metadata at
 most once per minute. UUIDs cannot belong to multiple logical devices. Within a
@@ -853,8 +870,7 @@ logical device, original UUID and aliases are OR alternatives; primary/secondary
 devices retain their existing ANY/ALL relationship. The settings UI shows the
 learned list and allows clearing it without deleting the original device.
 
-This repairs authenticated UUID association, not iOS background availability.
-PilotNest still closes its peripheral service when backgrounded; an alias learned
-in the foreground is not a guarantee of advertisement or connection availability
-while the iPhone is locked. Automated acceptance must use isolated pure/mocked
-logic, never lock, blank or sleep the user's real screen.
+This repairs authenticated UUID association and keeps a bound phone discoverable
+while the app is backgrounded. It cannot survive app termination or an iOS
+suspension that tears the peripheral down. Automated acceptance must use isolated
+pure/mocked logic, never lock, blank or sleep the user's real screen.

@@ -27,6 +27,12 @@ struct PairedMac: Codable, Identifiable, Equatable {
     var lastConnectedAt: Date?
     var manualHost: String?
     var manualPort: UInt16?
+    /// True once a Mac has advertised `bleIdentityLearning`, which it only does
+    /// while it holds an explicit BLE Unlock binding for this phone. The phone
+    /// must then keep advertising outside the foreground too, otherwise the
+    /// Mac's proximity unlock loses its peripheral as soon as the app is
+    /// backgrounded. Optional so records written by older builds still decode.
+    var wantsBLEProximity: Bool?
 
     var manualEndpoint: NWEndpoint? {
         guard let manualHost, let manualPort, let port = NWEndpoint.Port(rawValue: manualPort) else { return nil }
