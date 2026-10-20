@@ -77,8 +77,7 @@ extension QuickSearchPanelLayout {
         }
         let width = max(minimumWidth, min(defaultWidth, visibleFrame.width - 80))
         let rows = min(CGFloat(rowCount), CGFloat(preferredVisibleRows))
-        let contentHeight = headerHeight
-            + searchFieldHeight
+        let contentHeight = searchFieldHeight
             + rows * rowHeight
             + (rows > 0 ? 20 : 120)   // 结果区留白；无结果时给状态文案留出空间
             + footerHeight

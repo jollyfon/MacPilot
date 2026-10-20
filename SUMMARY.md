@@ -2257,3 +2257,11 @@ beta.8 推出去之后没有直接等用户眼睛验收，而是写了一条临�
 还补了一个容易被忽略的场景：MacPilot 没运行时在浮层里改完成员，没人重建 Helper，Dock 上的组合图标会一直是旧的。Helper 的 Info.plist 因此记录一份成员指纹（Bundle ID + 路径 + 顺序的 SHA-256），启动时的重建校验除版本和外观外也比对这份指纹。
 
 验证：`DockGroupsCoreTests` + `DockHelperPanelPlacementTests` 47 条通过（含 40 队列并发写、拒绝写入不落盘、签名随增删/排序变化）；MacPilot 与 Helper 的 Debug/Release（`-Xswiftc -warnings-as-errors`）构建通过。⚠️ 拖动与系统选择面板的真机手感（触控板拖拽阈值、多选后的浮层重建时机）无法在 CLI 里自动验收，需要装 beta.22 后点一遍。
+
+## 八十三、快速搜索：收掉顶栏「大额头」，指针没动就不许悬停改选中（2026-10-20）
+
+面板顶部原来是三截：16pt 独立拖拽条、2pt 间距、38pt 搜索行，输入框文字上方的留白明显多于下方，看起来像顶着一顶帽子。现在拖拽条整个删掉，抓手缩成 14×36 的 AppKit 拖动面，和放大镜一起放进搜索行最左端；顶部只剩 10pt 留白 + 36pt 行高 + 8pt 下留白，面板整体矮 8pt。`QuickSearchPanelLayout` 的 `headerHeight`／`searchFieldHeight` 相应换成 `searchRowTopPadding`／`searchRowHeight`／`searchRowBottomPadding`（`searchFieldHeight` 改为三者之和），`positionedFrame` 的高度公式同步，避免只改视图不改尺寸在底部留一条空白带。原来顶栏右上角的「回到默认位置」挪到页脚右侧（设置页那颗带文字的按钮不动），拖拽提示文案也改成「拖动搜索框左侧的抓手」。
+
+第二个问题是唤醒前指针已经停在结果区：面板出现后、尤其输入后结果行重建时，SwiftUI 补发的 hover 会把选中行从第一行挪到指针下。模型新增 `QuickSearchHoverGate`：`openPanel()` 记下呼出瞬间的指针位置，`selectRowByHover(at:)` 在指针离开该位置之前拒绝改选中；行内改用 `onContinuousHover`，指针真正移动后同一行内的移动也能接管，不需要先移出再移入。每次重新呼出都会重新上闸。`pointerLocation` 是一处可注入的读取口，测试用固定坐标模拟「指针没动」与「指针移动了 2pt」。
+
+验证：`swift test --filter "QuickSearch|ConfigStoreTests"` 222 条 / 29 套件全部通过；新增两条测试，一条用真实 NSPanel 找到搜索行里的抓手（断言上沿留白 10pt、高度等于搜索行高、位于左侧），一条验证静止指针不抢第一行、移动后悬停恢复、重新呼出重新上闸。`swift build -Xswiftc -warnings-as-errors` 通过（11.85s）。⚠️ 仍需要人眼验收：抓手并进搜索行后的观感（它会在放大镜左边多占 22pt），以及「连续悬停」在触控板快速划过时是否跟手。

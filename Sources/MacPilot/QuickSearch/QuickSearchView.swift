@@ -28,12 +28,10 @@ struct QuickSearchPanelContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            dragHeader
-
             inputRow
                 .padding(.horizontal, 12)
-                .padding(.top, 2)
-                .padding(.bottom, 8)
+                .padding(.top, QuickSearchPanelLayout.searchRowTopPadding)
+                .padding(.bottom, QuickSearchPanelLayout.searchRowBottomPadding)
 
             sectionDivider
 
@@ -87,43 +85,11 @@ struct QuickSearchPanelContent: View {
             .padding(.horizontal, 12)
     }
 
-    // MARK: 顶栏抓手
-
-    /// 拖动面。SwiftUI 的内容不会可靠地把「可移动背景」上的鼠标事件透传给
-    /// `NSHostingView`，所以这块交给一个明确的 AppKit 视图（与剪贴板面板同一做法）。
-    /// 记住过位置时右侧给一个「回到默认位置」，不靠隐藏手势。
-    private var dragHeader: some View {
-        ZStack {
-            QuickSearchPanelDragHandle()
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.quaternary)
-            HStack(spacing: 0) {
-                Spacer()
-                if model.panelPosition != nil {
-                    Button {
-                        model.resetPanelPosition()
-                    } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 16, height: 16)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(model.t("quickSearchResetPosition"))
-                }
-            }
-            .padding(.trailing, 8)
-        }
-        .frame(height: QuickSearchPanelLayout.headerHeight)
-        .help(model.t("quickSearchDragHint"))
-    }
-
     // MARK: 输入行
 
     private var inputRow: some View {
         HStack(spacing: 8) {
+            dragGrip
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -147,7 +113,22 @@ struct QuickSearchPanelContent: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: QuickSearchPanelLayout.searchFieldHeight - 8)
+        .frame(height: QuickSearchPanelLayout.searchRowHeight)
+    }
+
+    /// 拖动面与放大镜同处搜索行最左端，不再独占一条顶栏。
+    /// SwiftUI 的内容不会可靠地把「可移动背景」上的鼠标事件透传给 `NSHostingView`，
+    /// 所以拖动仍交给一个明确的 AppKit 视图（与剪贴板面板同一做法）。
+    private var dragGrip: some View {
+        QuickSearchPanelDragHandle()
+            .frame(width: 14, height: QuickSearchPanelLayout.searchRowHeight)
+            .overlay {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.quaternary)
+                    .allowsHitTesting(false)
+            }
+            .help(model.t("quickSearchDragHint"))
     }
 
     private var isSearching: Bool {
@@ -181,7 +162,7 @@ struct QuickSearchPanelContent: View {
                                 // 本来表示类别的那枚标签上：这一条为什么出现，一眼看得见。
                                 purposeLabel: result.matchedTagTerms.first
                             ) {
-                                model.selectRow(at: index)
+                                model.selectRowByHover(at: index)
                             } onActivate: {
                                 model.performPrimaryAction(on: result)
                             }
@@ -272,6 +253,22 @@ struct QuickSearchPanelContent: View {
                 Text(model.t("quickSearchIndexBuilding"))
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
+            }
+            // 「回到默认位置」从顶栏挪到页脚：顶栏收掉之后，这里仍留着一个
+            // 随手可用的入口，设置页里那颗带文字的按钮照旧。
+            if model.panelPosition != nil {
+                Button {
+                    model.resetPanelPosition()
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(model.t("quickSearchResetPosition"))
+                .accessibilityLabel(model.t("quickSearchResetPosition"))
             }
         }
     }
@@ -419,19 +416,19 @@ final class QuickSearchPanelResizeView: NSView {
 // MARK: - 拖动面
 
 private struct QuickSearchPanelDragHandle: NSViewRepresentable {
-    func makeNSView(context: Context) -> DragHandleView { DragHandleView() }
-    func updateNSView(_ nsView: DragHandleView, context: Context) {}
+    func makeNSView(context: Context) -> QuickSearchDragHandleView { QuickSearchDragHandleView() }
+    func updateNSView(_ nsView: QuickSearchDragHandleView, context: Context) {}
+}
 
-    final class DragHandleView: NSView {
-        override var acceptsFirstResponder: Bool { false }
+final class QuickSearchDragHandleView: NSView {
+    override var acceptsFirstResponder: Bool { false }
 
-        override func resetCursorRects() {
-            addCursorRect(bounds, cursor: .openHand)
-        }
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .openHand)
+    }
 
-        override func mouseDown(with event: NSEvent) {
-            (window as? QuickSearchPanel)?.dragFromHeader(with: event)
-        }
+    override func mouseDown(with event: NSEvent) {
+        (window as? QuickSearchPanel)?.dragFromHeader(with: event)
     }
 }
 
@@ -491,9 +488,11 @@ private struct QuickSearchResultRow: View {
             .background(rowBackground)
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            // 指针划过即选中：Enter 就能直接打开，不需要先点一下。
-            if hovering { onSelect() }
+        // 连续悬停而不是 onHover：onHover 只在「进入/离开」时触发，呼出面板时
+        // 指针若已经压在这一行上，那条补发的事件会把选中行从第一行挪走；改成
+        // 连续事件后，闸门可以要求指针真的移动过，同一行内移动也能接着选中。
+        .onContinuousHover { phase in
+            if case .active = phase { onSelect() }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)

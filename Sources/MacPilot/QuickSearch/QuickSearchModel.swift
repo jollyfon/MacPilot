@@ -67,6 +67,28 @@ enum QuickSearchFailure: Equatable, Sendable {
     }
 }
 
+/// 悬停选中的闸门：呼出面板时指针若已经停在结果区，面板一出现就会补一条
+/// hover 事件；用户还没移动指针，那不是选择意图。记住呼出位置，直到指针真的
+/// 离开这里才允许悬停改动选中行。
+struct QuickSearchHoverGate {
+    private var summonLocation: NSPoint?
+
+    mutating func arm(at location: NSPoint) {
+        summonLocation = location
+    }
+
+    mutating func disarm() {
+        summonLocation = nil
+    }
+
+    mutating func allowsSelection(at location: NSPoint) -> Bool {
+        guard let summonLocation else { return true }
+        guard location != summonLocation else { return false }
+        self.summonLocation = nil
+        return true
+    }
+}
+
 // MARK: - 模型
 
 @MainActor
@@ -132,6 +154,8 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     /// 由测试注入：手动放行文件查询防抖。同一进程里其它 @MainActor 套件会把主 Actor
     /// 队列堵上一两分钟，靠墙钟计时的用例在那种环境下只会误报。
     var fileDebounceScheduler: (@MainActor (Duration, @escaping @MainActor () -> Void) -> Void)?
+    /// 由测试注入：读取当前指针位置。默认是真实的系统鼠标位置。
+    var pointerLocation: () -> NSPoint = { NSEvent.mouseLocation }
 
     let inventory: ApplicationInventory
     let icons: QuickSearchIconLoader
@@ -149,6 +173,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     private var panel: QuickSearchPanelPresenting?
     private var noticePanel: QuickSearchNoticePresenting?
     private var searchGeneration = 0
+    private var hoverGate = QuickSearchHoverGate()
 
     var isRunning: Bool { runtimeState == .ready || runtimeState == .starting }
     var isPanelVisible: Bool { presentation == .visible }
@@ -445,11 +470,15 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         inventory.syncRunningState()
         inventory.refreshIfStale()
         publishIndexState()
+        // 先记下呼出时指针在哪：面板可能正好落在指针下面，随后补发的悬停
+        // 事件不能替用户做选择。指针真的移动之后闸门才放行。
+        hoverGate.arm(at: pointerLocation())
         presentation = .visible
         panel.open()
     }
 
     func closePanel() {
+        hoverGate.disarm()
         invalidateFileSearch()
         panel?.close()
         panel = nil
@@ -470,6 +499,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     }
 
     private func handlePanelClosed() {
+        hoverGate.disarm()
         invalidateFileSearch()
         panel = nil
         if presentation == .visible { presentation = .hidden }
@@ -632,6 +662,14 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     func selectRow(at index: Int) {
         guard results.indices.contains(index), index != selectedRowIndex else { return }
         selectedRowIndex = index
+    }
+
+    /// 悬停选中只认指针真实的移动。呼出面板时指针若正压在结果区，面板出现
+    /// 补发的 hover 不该把选中行从第一行挪走；移动之后同一行内的连续悬停
+    /// 也照常接管。
+    func selectRowByHover(at index: Int) {
+        guard hoverGate.allowsSelection(at: pointerLocation()) else { return }
+        selectRow(at: index)
     }
 
     private func trimSelectionIndex() {

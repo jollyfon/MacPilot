@@ -1355,6 +1355,46 @@ struct QuickSearchActionTests {
         #expect(harness.model.selectedRowIndex <= max(harness.model.results.count - 1, 0))
     }
 
+    @Test func aPointerThatHasNotMovedSinceSummonKeepsTheFirstRow() async {
+        let harness = Harness()
+        let entries = [
+            QuickSearchApplicationEntry(
+                url: URL(fileURLWithPath: "/Applications/Alpha.app"),
+                name: "Alpha",
+                bundleIdentifier: "com.test.alpha"
+            ),
+            QuickSearchApplicationEntry(
+                url: URL(fileURLWithPath: "/Applications/Beta.app"),
+                name: "Beta",
+                bundleIdentifier: "com.test.beta"
+            )
+        ]
+        await harness.enable(entries: entries)
+        var pointer = NSPoint(x: 420, y: 360)
+        harness.model.pointerLocation = { pointer }
+
+        harness.model.openPanel()
+        harness.model.updateQuery("a")
+        #expect(harness.model.results.count == 2)
+
+        // 面板正好落在指针下：补发的悬停事件不能替用户把选中行挪走。
+        harness.model.selectRowByHover(at: 1)
+        #expect(harness.model.selectedRowIndex == 0)
+
+        // 指针真的移动之后，悬停照常接管。
+        pointer.x += 2
+        harness.model.selectRowByHover(at: 1)
+        #expect(harness.model.selectedRowIndex == 1)
+
+        // 重新呼出会重新上闸：新一次打开同样从第一行开始。
+        harness.model.closePanel()
+        harness.model.openPanel()
+        harness.model.updateQuery("a")
+        harness.model.selectRowByHover(at: 1)
+        #expect(harness.model.selectedRowIndex == 0)
+        harness.model.shutdown()
+    }
+
     @Test func pointerSelectionDoesNotScrollTheListButKeyboardNavigationDoes() async {
         let harness = Harness()
         await harness.enable(entries: [
@@ -2999,11 +3039,43 @@ struct QuickSearchRealPanelPlacementTests {
         #expect(abs(panel.frame.minX - startFrame.minX) < 1)
     }
 
+    /// 抓手必须真的挂在顶部搜索行里。以前它独占一条 16pt 顶栏，输入框上方
+    /// 空出一条明显的「大额头」；这条测试把面板上沿的留白钉在 10pt。
+    @Test func theDragGripSitsInTheTopSearchRow() throws {
+        let harness = Harness()
+        defer { harness.model.shutdown() }
+        let panel = QuickSearchPanel(model: harness.model, onClose: {})
+        defer { panel.close() }
+        panel.applyPlacement()
+        panel.contentView?.layoutSubtreeIfNeeded()
+
+        let contentView = try #require(panel.contentView)
+        let grip = try #require(firstDragHandle(in: contentView))
+        let frame = grip.convert(grip.bounds, to: contentView)
+        // NSHostingView 是翻转坐标系（原点在左上），上沿距离就是 minY。
+        let topInset = contentView.isFlipped
+            ? frame.minY
+            : contentView.bounds.height - frame.maxY
+
+        #expect(abs(topInset - QuickSearchPanelLayout.searchRowTopPadding) < 1)
+        #expect(abs(frame.height - QuickSearchPanelLayout.searchRowHeight) < 1)
+        #expect(frame.minX < 80)
+    }
+
     private func firstResizeView(in view: NSView?) -> QuickSearchPanelResizeView? {
         guard let view else { return nil }
         if let match = view as? QuickSearchPanelResizeView { return match }
         for subview in view.subviews {
             if let match = firstResizeView(in: subview) { return match }
+        }
+        return nil
+    }
+
+    private func firstDragHandle(in view: NSView?) -> QuickSearchDragHandleView? {
+        guard let view else { return nil }
+        if let match = view as? QuickSearchDragHandleView { return match }
+        for subview in view.subviews {
+            if let match = firstDragHandle(in: subview) { return match }
         }
         return nil
     }

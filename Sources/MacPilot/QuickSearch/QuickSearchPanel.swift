@@ -29,11 +29,16 @@ enum QuickSearchPanelLayout {
     static let cornerRadius: CGFloat = 16
     /// 结果区一屏大致能放下的行数，用来算初始高度。
     static let preferredVisibleRows = 9
-    static let searchFieldHeight: CGFloat = 46
+    /// 顶部搜索行：上下留白 + 行高。拖动抓手就在这一行左端，不再单独占一条
+    /// 顶栏——那条 16pt 的空带只会把输入框顶成「大额头」。
+    static let searchRowTopPadding: CGFloat = 10
+    static let searchRowHeight: CGFloat = 36
+    static let searchRowBottomPadding: CGFloat = 8
+    /// 顶部搜索区总高（含上下留白），面板高度按它计算。
+    static var searchFieldHeight: CGFloat {
+        searchRowTopPadding + searchRowHeight + searchRowBottomPadding
+    }
     static let footerHeight: CGFloat = 34
-    /// 顶栏抓手条：只用来拖动，不做标题。贴着圆角的高度就够，
-    /// 再高就变成输入框上方一条空带。
-    static let headerHeight: CGFloat = 16
 }
 
 // MARK: - 按键分流
