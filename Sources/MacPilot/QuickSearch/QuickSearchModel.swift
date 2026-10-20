@@ -109,6 +109,9 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     @Published private(set) var applicationResults: [QuickSearchResult] = []
     @Published private(set) var fileResults: [QuickSearchResult] = []
     @Published private(set) var selectedRowIndex: Int = 0
+    /// 只有键盘导航才让列表跟着滚动。悬停也会改选中行，但此时滚到中间会把
+    /// 指针下方换成另一行，再触发一次悬停选中——在下半屏会变成来回跳动。
+    @Published private(set) var selectionScrollToken = 0
     /// Spotlight 查不了的原因。有值时必须显示出来，不能显示成「没有结果」。
     @Published private(set) var fileSearchIssue: QuickSearchIndexIssue?
     /// 快捷键注册或清理的错误/警告；实际注册状态由 `isHotKeyRegistered` 表示。
@@ -621,11 +624,13 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         let rows = results.count
         guard rows > 0 else { selectedRowIndex = 0; return }
         selectedRowIndex = min(max(selectedRowIndex + delta, 0), rows - 1)
+        selectionScrollToken &+= 1
     }
 
     /// 鼠标悬停/点击直接指定行。越界下标不改变当前选择。
+    /// 指针选中不请求滚动：滚动会改变指针下的行，反过来再选中，形成抖动。
     func selectRow(at index: Int) {
-        guard results.indices.contains(index) else { return }
+        guard results.indices.contains(index), index != selectedRowIndex else { return }
         selectedRowIndex = index
     }
 

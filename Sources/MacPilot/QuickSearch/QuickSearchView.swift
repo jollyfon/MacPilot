@@ -35,8 +35,12 @@ struct QuickSearchPanelContent: View {
                 .padding(.top, 4)
                 .padding(.bottom, 8)
 
+            sectionDivider
+
             resultsArea
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            sectionDivider
 
             footer
                 .padding(.horizontal, 12)
@@ -45,13 +49,7 @@ struct QuickSearchPanelContent: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background {
-            RoundedRectangle(cornerRadius: QuickSearchPanelLayout.cornerRadius, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.18), radius: 22, y: 8)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: QuickSearchPanelLayout.cornerRadius, style: .continuous)
-                .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+            panelSurface
         }
         .overlay {
             QuickSearchPanelResizeHandle()
@@ -62,6 +60,30 @@ struct QuickSearchPanelContent: View {
             transaction.animation = nil
             transaction.disablesAnimations = true
         }
+    }
+
+    /// 面板本体只有一层：macOS 26 用系统液态玻璃，旧系统退回材质。
+    /// 不再额外叠描边——圆角已经是面板的边界，多加一圈只会看着像框。
+    @ViewBuilder
+    private var panelSurface: some View {
+        let shape = RoundedRectangle(
+            cornerRadius: QuickSearchPanelLayout.cornerRadius,
+            style: .continuous
+        )
+        if #available(macOS 26.0, *) {
+            Color.clear
+                .glassEffect(.regular, in: shape)
+        } else {
+            shape.fill(.ultraThinMaterial)
+        }
+    }
+
+    /// 区块之间只用一根发丝线分隔，不再给每段铺一层背景。
+    private var sectionDivider: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.08))
+            .frame(height: 1)
+            .padding(.horizontal, 12)
     }
 
     // MARK: 顶栏抓手
@@ -125,14 +147,6 @@ struct QuickSearchPanelContent: View {
         }
         .padding(.horizontal, 10)
         .frame(height: QuickSearchPanelLayout.searchFieldHeight - 8)
-        .background(
-            Color.primary.opacity(0.06),
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.primary.opacity(0.07))
-        )
     }
 
     private var isSearching: Bool {
@@ -195,9 +209,10 @@ struct QuickSearchPanelContent: View {
                     .padding(.vertical, 3)
                 }
                 .scrollContentBackground(.hidden)
-                .onChange(of: model.selectedRowIndex) { _, index in
-                    guard model.results.indices.contains(index) else { return }
-                    proxy.scrollTo(model.results[index].id, anchor: .center)
+                // 只有键盘导航发这个令牌；悬停选中不滚动，指针下的行保持不动。
+                .onChange(of: model.selectionScrollToken) { _, _ in
+                    guard model.results.indices.contains(model.selectedRowIndex) else { return }
+                    proxy.scrollTo(model.results[model.selectedRowIndex].id, anchor: .center)
                 }
             }
         }
@@ -444,7 +459,7 @@ private struct QuickSearchResultRow: View {
                         .truncationMode(.middle)
                     Text(result.subtitle)
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -459,13 +474,13 @@ private struct QuickSearchResultRow: View {
                 }
                 Text(purposeLabel ?? categoryLabel)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(isSelected ? Color(nsColor: .controlAccentColor) : Color.secondary.opacity(0.7))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                     .padding(.horizontal, 6)
                     .frame(height: 16)
                     .background(
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(isSelected
-                                  ? Color(nsColor: .controlAccentColor).opacity(0.16)
+                                  ? Color.accentColor.opacity(0.16)
                                   : Color.primary.opacity(0.06))
                     )
             }
@@ -505,14 +520,6 @@ private struct QuickSearchResultRow: View {
 
     private var rowBackground: some View {
         RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(isSelected
-                  ? Color(nsColor: .controlAccentColor).opacity(0.22)
-                  : Color.primary.opacity(0.045))
-            .overlay {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(Color(nsColor: .controlAccentColor).opacity(0.55), lineWidth: 1)
-                }
-            }
+            .fill(isSelected ? Color.accentColor.opacity(0.26) : Color.clear)
     }
 }

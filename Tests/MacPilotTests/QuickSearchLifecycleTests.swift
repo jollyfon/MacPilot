@@ -1355,6 +1355,42 @@ struct QuickSearchActionTests {
         #expect(harness.model.selectedRowIndex <= max(harness.model.results.count - 1, 0))
     }
 
+    @Test func pointerSelectionDoesNotScrollTheListButKeyboardNavigationDoes() async {
+        let harness = Harness()
+        await harness.enable(entries: [
+            QuickSearchApplicationEntry(
+                url: URL(fileURLWithPath: "/Applications/Safari.app"),
+                name: "Safari",
+                bundleIdentifier: "com.test.safari"
+            ),
+            QuickSearchApplicationEntry(
+                url: URL(fileURLWithPath: "/Applications/Slack.app"),
+                name: "Slack",
+                bundleIdentifier: "com.test.slack"
+            ),
+            QuickSearchApplicationEntry(
+                url: URL(fileURLWithPath: "/Applications/Alfred.app"),
+                name: "Alfred",
+                bundleIdentifier: "com.test.alfred"
+            )
+        ])
+        harness.model.openPanel()
+        harness.model.updateQuery("a")
+        #expect(harness.model.results.count == 3)
+
+        let token = harness.model.selectionScrollToken
+        // 悬停只挪选中行，不请求滚动：滚动会把指针下的行换掉，再触发新的悬停。
+        harness.model.selectRow(at: 2)
+        #expect(harness.model.selectedRowIndex == 2)
+        #expect(harness.model.selectionScrollToken == token)
+
+        // 键盘导航才让列表跟着走。
+        harness.model.moveSelection(by: -1)
+        #expect(harness.model.selectedRowIndex == 1)
+        #expect(harness.model.selectionScrollToken == token + 1)
+        harness.model.shutdown()
+    }
+
     @Test func opensThePanelWhileTheIndexIsStillBuilding() async {
         let harness = Harness()
         await harness.enable()
