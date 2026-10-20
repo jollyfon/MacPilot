@@ -43,6 +43,23 @@ struct RemoteBonjourPublisherTests {
         #expect(recoveries == 1)
     }
 
+    @Test("a policy denial records which console account owns the Local Network decision")
+    func denialRecordsConsolePolicyOwner() {
+        let registration = FakeRegistration()
+        let publisher = RemoteBonjourPublisher(registration: registration)
+        var logs: [String] = []
+        let server = makeServer(publisher: publisher, log: { logs.append($0) })
+        defer { server.stop() }
+        server.handleListenerState(.ready)
+        registration.replies[0](-65570, false)
+        #expect(server.localNetworkConsoleUser == LocalNetworkSessionDiagnosis.consoleUserName())
+        #expect(logs.contains {
+            $0.hasPrefix("Local network policy consoleUser=")
+                && $0.contains("processUser=")
+                && $0.contains("consoleMismatch=")
+        })
+    }
+
     @Test("granting permission restores publication automatically without touching paired identities")
     func automaticRecoveryPreservesPairings() throws {
         let registration = FakeRegistration()
@@ -160,12 +177,16 @@ struct RemoteBonjourPublisherTests {
                           secretStore: InMemorySecretStore(), persist: {}, log: { _ in })
     }
 
-    private func makeServer(publisher: RemoteBonjourPublisher, store: RemoteDeviceStore? = nil) -> RemoteControlServer {
+    private func makeServer(
+        publisher: RemoteBonjourPublisher,
+        store: RemoteDeviceStore? = nil,
+        log: @escaping (String) -> Void = { _ in }
+    ) -> RemoteControlServer {
         RemoteControlServer(
             deviceStore: store ?? makeStore(),
             screenControl: MacScreenControlService(
                 credentials: ScreenCredentialStore(secretStore: InMemorySecretStore(), log: { _ in }), log: { _ in }),
-            bonjourPublisher: publisher, log: { _ in })
+            bonjourPublisher: publisher, log: log)
     }
 
     private final class FakeRegistration: RemoteBonjourRegistering {

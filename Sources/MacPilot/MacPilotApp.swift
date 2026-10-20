@@ -580,6 +580,7 @@ enum AppText {
         "remoteNetworkFailed": "设备发现暂不可用 · 错误 %d",
         "remoteNetworkPermissionHint": "MacPilot 需要本地网络权限，才能让 PilotNest 发现并连接这台 Mac。首次使用时，请在系统提示中选择“允许”。",
         "remoteNetworkDeniedHint": "macOS 拒绝了 MacPilot 这次的设备发现请求（错误 -65570），即使“本地网络”开关已经开启。应用更新后，系统可能保留旧的授权状态。请先重新打开 MacPilot；如果仍被拒绝，退出 MacPilot 后把“隐私与安全 → 本地网络”里的开关关闭再打开，然后重新启动。已有配对会保留。",
+        "remoteNetworkOtherConsoleUserHint": "本地网络的授权由控制台账户「%1$@」决定，而 MacPilot 正在「%2$@」的会话中运行。macOS 正在套用「%1$@」的拒绝结果，所以在「%2$@」里重新打开 MacPilot 或重置本地网络开关都不会生效。请切换到「%1$@」（或注销该账户），在它的“系统设置 → 隐私与安全性 → 本地网络”中允许 MacPilot，然后切回「%2$@」重新打开 MacPilot。已有配对会保留。",
         "remoteNetworkFailedHint": "MacPilot 暂时无法发布设备发现服务，正在自动重试。已有配对会保留。",
         "remoteOpenLocalNetworkSettings": "打开本地网络设置",
         "remoteRelaunchMacPilot": "重新打开 MacPilot",
@@ -1824,6 +1825,7 @@ enum AppText {
             "remoteNetworkFailed": "Discovery unavailable · error %d",
             "remoteNetworkPermissionHint": "MacPilot needs local network access so PilotNest can discover and connect to this Mac. Choose Allow in the system prompt when using it for the first time.",
             "remoteNetworkDeniedHint": "macOS is rejecting MacPilot's discovery request for this run (error -65570), even when Local Network is already on. After an app update the system can keep the previous authorization state. Reopen MacPilot first. If discovery is still rejected, quit MacPilot, switch Local Network off and back on in Privacy & Security → Local Network, then reopen it. Existing pairings are kept.",
+            "remoteNetworkOtherConsoleUserHint": "The Local Network decision belongs to the console account “%1$@”, while MacPilot is running in “%2$@”’s session. macOS is applying “%1$@”’s denial, so reopening MacPilot or toggling Local Network in “%2$@” cannot change it. Switch to “%1$@” (or log that account out), allow MacPilot in its System Settings → Privacy & Security → Local Network, then switch back to “%2$@” and reopen MacPilot. Existing pairings are kept.",
             "remoteNetworkFailedHint": "MacPilot cannot publish its discovery service right now and is retrying automatically. Existing pairings are kept.",
             "remoteOpenLocalNetworkSettings": "Open Local Network Settings",
             "remoteRelaunchMacPilot": "Reopen MacPilot",
@@ -2524,9 +2526,20 @@ final class MacPilotModel: ObservableObject {
         }
         remoteControl.onLocalNetworkPermissionDenied = { [weak self] in
             guard let self else { return }
-            self.showAlert(self.t("remoteNetworkDeniedHint"))
-            self.alertOffersLocalNetworkSettings = true
-            self.alertOffersRelaunch = true
+            if let consoleUser = LocalNetworkSessionDiagnosis.otherConsoleUser(
+                consoleUser: self.remoteControl.localNetworkConsoleUser,
+                processUser: LocalNetworkSessionDiagnosis.processUserName()
+            ) {
+                self.showAlert(self.t(
+                    "remoteNetworkOtherConsoleUserHint",
+                    consoleUser,
+                    LocalNetworkSessionDiagnosis.processUserName()
+                ))
+            } else {
+                self.showAlert(self.t("remoteNetworkDeniedHint"))
+                self.alertOffersLocalNetworkSettings = true
+                self.alertOffersRelaunch = true
+            }
         }
         remoteControl.onLocalNetworkAvailable = { [weak self] in
             guard let self, self.alertOffersLocalNetworkSettings else { return }

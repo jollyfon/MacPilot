@@ -605,7 +605,8 @@ with both `IncludeP2P` and `IncludeAWDL`. Only a successful registration Add
 callback marks discovery available. This avoids an `NWListener.ready` masking
 an internal advertiser's `PolicyDenied`. Registration failures surface on Home
 and Remote Control; policy rejection offers the Local Network settings entry and
-a user-triggered **Reopen MacPilot** action. Enabling Remote Control opens its
+a user-triggered **Reopen MacPilot** action when the console account matches the
+account running MacPilot. Enabling Remote Control opens its
 setup page and explains the first-use system permission prompt. A previously
 allowed app can also receive a policy error while macOS updates network privacy
 rules, so the UI describes the rejected operation rather than assuming the user
@@ -617,6 +618,17 @@ the feature stops. The retry replaces only the advertisement, preserving the
 listener, authenticated connections, Bluetooth, and paired keys. Success clears
 pending network guidance. Recovery never resets permissions, restarts the app
 automatically, or re-pairs; the reopen action is only ever taken by the user.
+
+Local Network privacy is keyed to the **console account**, not to the account
+running MacPilot. After a fast user switch the two can differ, and a
+`DenyMulticast` decision saved for the account in front of the screen decides a
+registration attempt made from another account's session. Reopening MacPilot or
+toggling Local Network in the session's own settings cannot change that verdict,
+so the notice names the console account and withholds both actions in that
+state; the user has to allow MacPilot in the console account's settings or log
+that account out. Every transition to `permissionDenied` also logs
+`consoleUser`, `processUser`, and `consoleMismatch` in the diagnostic log, so
+this case is distinguishable from a stale post-update grant.
 
 The Bluetooth PSM characteristic is dynamic: it returns the currently published
 channel number, and returns no value after that publication is stopped. The Mac

@@ -8,12 +8,12 @@ struct RemoteLocalNetworkNotice: View {
     @ObservedObject var server: RemoteControlServer
 
     var body: some View {
-        if let hintKey {
+        if hintKey != nil {
             VStack(alignment: .leading, spacing: 10) {
                 Label(model.t("remoteControl"), systemImage: "exclamationmark.triangle")
                     .font(.headline)
-                Text(model.t(hintKey)).font(.subheadline)
-                if server.bonjourStatus == .permissionDenied {
+                Text(hintText).font(.subheadline)
+                if server.bonjourStatus == .permissionDenied, otherConsoleUser == nil {
                     HStack {
                         Button(model.t("remoteRelaunchMacPilot")) { Self.relaunch() }
                             .macPilotProminentButtonStyle()
@@ -30,10 +30,30 @@ struct RemoteLocalNetworkNotice: View {
 
     private var hintKey: String? {
         switch server.bonjourStatus {
-        case .permissionDenied: return "remoteNetworkDeniedHint"
+        case .permissionDenied:
+            return otherConsoleUser == nil
+                ? "remoteNetworkDeniedHint"
+                : "remoteNetworkOtherConsoleUserHint"
         case .failed: return "remoteNetworkFailedHint"
         default: return nil
         }
+    }
+
+    private var hintText: String {
+        guard let hintKey else { return "" }
+        guard let otherConsoleUser else { return model.t(hintKey) }
+        return model.t(hintKey, otherConsoleUser, LocalNetworkSessionDiagnosis.processUserName())
+    }
+
+    /// Reopening the app or toggling the switch in this account cannot override
+    /// the console account's policy, so only offer those actions when the
+    /// console account is the one running MacPilot.
+    private var otherConsoleUser: String? {
+        guard server.bonjourStatus == .permissionDenied else { return nil }
+        return LocalNetworkSessionDiagnosis.otherConsoleUser(
+            consoleUser: server.localNetworkConsoleUser,
+            processUser: LocalNetworkSessionDiagnosis.processUserName()
+        )
     }
 
     static func openSettings() {

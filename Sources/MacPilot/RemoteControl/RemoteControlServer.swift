@@ -35,6 +35,9 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
     @Published private(set) var connectedDeviceNames: [String] = []
     @Published private(set) var lastError: String?
     @Published private(set) var bonjourStatus: RemoteBonjourStatus = .stopped
+    /// The account whose Local Network privacy decision applies. It can differ
+    /// from the account running MacPilot after a fast user switch.
+    @Published private(set) var localNetworkConsoleUser: String?
     var onLocalNetworkPermissionDenied: (@MainActor () -> Void)?
     var onLocalNetworkAvailable: (@MainActor () -> Void)?
 
@@ -117,8 +120,20 @@ final class RemoteControlServer: ObservableObject, RemoteConnectionHost, Managed
             guard let self else { return }
             self.bonjourStatus = status
             self.log("Bonjour registration status=\(status)")
-            if status == .permissionDenied { self.onLocalNetworkPermissionDenied?() }
-            if status == .available { self.onLocalNetworkAvailable?() }
+            if status == .permissionDenied {
+                self.localNetworkConsoleUser = LocalNetworkSessionDiagnosis.consoleUserName()
+                let processUser = LocalNetworkSessionDiagnosis.processUserName()
+                let consoleUser = self.localNetworkConsoleUser ?? "none"
+                let mismatch = LocalNetworkSessionDiagnosis.otherConsoleUser(
+                    consoleUser: self.localNetworkConsoleUser,
+                    processUser: processUser
+                ) != nil
+                self.log("Local network policy consoleUser=\(consoleUser) processUser=\(processUser) consoleMismatch=\(mismatch)")
+                self.onLocalNetworkPermissionDenied?()
+            } else {
+                self.localNetworkConsoleUser = nil
+                if status == .available { self.onLocalNetworkAvailable?() }
+            }
         }
     }
 
