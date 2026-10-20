@@ -162,15 +162,11 @@ class StaplerRetryTests(unittest.TestCase):
     def testExhaustedTransientRetriesReturnFinalStaplerStatus(self) -> None:
         result, calls, sleeps, target = self.run_stapler(
             "staple",
-            [
-                {"status": 68, "stderr": TRANSIENT_CLOUDKIT_ERROR},
-                {"status": 68, "stderr": TRANSIENT_CLOUDKIT_ERROR},
-                {"status": 68, "stderr": TRANSIENT_CLOUDKIT_ERROR},
-            ],
+            [{"status": 68, "stderr": TRANSIENT_CLOUDKIT_ERROR}] * 6,
         )
         self.assertEqual(result.returncode, 68, result.stderr)
-        self.assertEqual(calls, [["stapler", "staple", target]] * 3)
-        self.assertEqual(sleeps, [["10"], ["30"]])
+        self.assertEqual(calls, [["stapler", "staple", target]] * 6)
+        self.assertEqual(sleeps, [["10"], ["30"], ["60"], ["120"], ["180"]])
 
     def testReleaseCallersKeepStaplingValidationAndSignatureChecksWired(self) -> None:
         distribute = (REPO_ROOT / "Scripts" / "distribute-app.sh").read_text(
