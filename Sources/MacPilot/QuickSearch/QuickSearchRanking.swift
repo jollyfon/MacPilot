@@ -155,12 +155,13 @@ enum QuickSearchMatchTier: Int, Comparable, Sendable {
     case contains = 3
     case pinyinPrefix = 4
     case pinyinInitials = 5
+    /// 名称里只有零散字母按序对上。仍然是名称命中，必须排在标签与描述之前：
+    /// 搜 `art` 时 `aTrust` 是名字命中，不能被「artificial intelligence」标签挤下去。
+    case fuzzy = 6
     /// 名称一个字母都没对上，但用途标签对上了。排在所有名称命中之后：
-    /// 用户要的是名字里带「图」的软件，不是所有被标成「图片」的软件。
-    case tag = 6
-    case fuzzy = 7
-    /// 只有厂商写的描述命中。它比模糊名称还弱：名字哪怕只对上几个字母，
-    /// 也比「描述里提过这个词」更可能指向用户要找的应用。
+    /// 用户要的是名字里带「art」的软件，不是所有被标成「artificial intelligence」的软件。
+    case tag = 7
+    /// 只有厂商写的描述命中。它比标签还弱：标签是厂商声明的用途，描述只是提到过。
     case keyword = 8
 
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
@@ -356,7 +357,8 @@ enum QuickSearchMatcher {
 struct QuickSearchRankedResult<Value: Sendable>: Sendable {
     let value: Value
     let match: QuickSearchMatch
-    /// 历史打开次数，**排序的第一依据**：同一个查询下用过多次的排在前。
+    /// 历史打开次数，用来在同一匹配等级内决出先后；它不能越过匹配等级：
+    /// 名字命中的冷门应用仍排在常打开的标签命中之前。
     let usageCount: Int
     /// 稳定次序用的名称与路径。
     let stableName: String
@@ -364,17 +366,17 @@ struct QuickSearchRankedResult<Value: Sendable>: Sendable {
 }
 
 enum QuickSearchRanking {
-    /// 声明顺序即优先级：使用频率 → 匹配程度 → 位置 → 代价 → 稳定次序。
+    /// 声明顺序即优先级：匹配程度 → 使用频率 → 位置 → 代价 → 稳定次序。
     ///
-    /// 频率在匹配程度之前是有意的：输入「abc」出来一排同名候选时，用户要的是
-    /// 那一个被反复打开的，不是名字里字母排得最正的。次数相同才回头比匹配质量，
-    /// 所以从没用过的东西依然按名字排。
+    /// 匹配程度在频率之前是有意的：名字命中代表用户输入的就是这个名字的一部分，
+    /// 必须排在仅靠用途标签或描述命中的常开应用之前。同一等级内才看使用次数，
+    /// 所以两个都叫 Mail 的候选里，常打开的那个在前；都没用过时按名字排。
     static func orderedByRelevance<Value>(
         _ lhs: QuickSearchRankedResult<Value>,
         _ rhs: QuickSearchRankedResult<Value>
     ) -> Bool {
-        if lhs.usageCount != rhs.usageCount { return lhs.usageCount > rhs.usageCount }
         if lhs.match.tier != rhs.match.tier { return lhs.match.tier < rhs.match.tier }
+        if lhs.usageCount != rhs.usageCount { return lhs.usageCount > rhs.usageCount }
         if lhs.match.position != rhs.match.position { return lhs.match.position < rhs.match.position }
         if lhs.match.gap != rhs.match.gap { return lhs.match.gap < rhs.match.gap }
         let nameOrder = lhs.stableName.localizedCaseInsensitiveCompare(rhs.stableName)

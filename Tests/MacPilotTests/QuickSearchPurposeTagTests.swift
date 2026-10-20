@@ -233,6 +233,45 @@ struct QuickSearchPurposeMatchTests {
         #expect(results.map(\.title) == ["下载工具的副本", "Motrix"])
     }
 
+    @Test func aFrequentPurposeMatchNeverOutranksAnyNameMatch() {
+        // 回归：搜 `art` 时，常打开的「artificial intelligence」标签应用不能
+        // 压在 ArtCraft（前缀命中）和 aTrust（模糊名称命中）前面。
+        let artCraft = makeEntry("ArtCraft", at: "/Applications/ArtCraft.app", bundleID: "com.test.artcraft")
+        let aTrust = makeEntry("aTrust", at: "/Applications/aTrust.app", bundleID: "com.test.atrust")
+        let workBuddy = makeEntry(
+            "WorkBuddy AI",
+            at: "/Applications/WorkBuddy AI.app",
+            bundleID: "com.test.workbuddy",
+            tags: ["artificial intelligence"]
+        )
+        let qoder = makeEntry(
+            "Qoder",
+            at: "/Applications/Qoder.app",
+            bundleID: "com.test.qoder",
+            tags: ["artificial intelligence"]
+        )
+        let usage: (QuickSearchApplicationEntry) -> Int = { entry in
+            switch entry.name {
+            case "WorkBuddy AI": return 40
+            case "Qoder": return 10
+            case "aTrust": return 3
+            default: return 0
+            }
+        }
+
+        let results = ApplicationSearchProvider.search(
+            query: "art",
+            entries: [workBuddy, aTrust, qoder, artCraft],
+            usage: usage,
+            includeTags: true,
+            limit: 20
+        )
+
+        #expect(results.map(\.title) == ["ArtCraft", "aTrust", "WorkBuddy AI", "Qoder"])
+        #expect(results[0].matchedTagTerms.isEmpty)
+        #expect(results[1].matchedTagTerms.isEmpty)
+    }
+
     @Test func aWiderPhraseStillMatchesTheShorterTag() {
         let results = searched("下载器", among: [downloader], includeTags: true)
 

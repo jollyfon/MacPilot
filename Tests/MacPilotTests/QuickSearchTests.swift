@@ -173,19 +173,21 @@ struct QuickSearchMatchingTests {
         #expect(ranked.first?.url.path == "/Applications/B.app")
     }
 
-    @Test func aFrequentlyOpenedAppOutranksANeverUsedExactMatch() {
-        // 「按使用频率排序」是首要依据：搜 abc 时天天开的 AB Converter 排在
-        // 一次没开过的 Abc 前面。次数相同（含都为 0）才回头比名字匹配得多好。
+    @Test func aNameMatchOutranksAFrequentlyOpenedWeakerMatch() {
+        // 名字命中是首要依据：搜 abc 时精确命中的 Abc 永远排在只是模糊对上的
+        // AB Converter 前面，即使后者被反复打开。使用次数只在同一匹配等级内生效。
         let exact = makeEntry("Abc", at: "/Applications/Exact.app", bundleID: "com.test.exact")
         let opened = makeEntry("AB Converter", at: "/Applications/Open.app", bundleID: "com.test.open")
         let usage: (QuickSearchApplicationEntry) -> Int = { $0.path == "/Applications/Open.app" ? 40 : 0 }
 
         let ranked = ApplicationSearchProvider.search(query: "abc", entries: [exact, opened], usage: usage, includeTags: false, limit: 20)
-        #expect(ranked.map(\.title) == ["AB Converter", "Abc"])
+        #expect(ranked.map(\.title) == ["Abc", "AB Converter"])
 
-        // 都没开过 → 回到匹配程度：全名相同的在前。
-        let cold = ApplicationSearchProvider.search(query: "abc", entries: [exact, opened], includeTags: false, limit: 20)
-        #expect(cold.map(\.title) == ["Abc", "AB Converter"])
+        // 同一等级内仍然按打开次数排：两个都精确命中时，常打开的在前。
+        let frequent = makeEntry("Abc", at: "/Applications/Frequent.app", bundleID: "com.test.frequent")
+        let sameTierUsage: (QuickSearchApplicationEntry) -> Int = { $0.path == "/Applications/Frequent.app" ? 40 : 0 }
+        let sameTier = ApplicationSearchProvider.search(query: "abc", entries: [exact, frequent], usage: sameTierUsage, includeTags: false, limit: 20)
+        #expect(sameTier.first?.url.path == "/Applications/Frequent.app")
     }
 
     @Test func openedFilesRiseToTheTopButOtherwiseKeepSpotlightsOrder() {
