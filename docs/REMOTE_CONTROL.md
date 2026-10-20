@@ -628,7 +628,11 @@ so the notice names the console account and withholds both actions in that
 state; the user has to allow MacPilot in the console account's settings or log
 that account out. Every transition to `permissionDenied` also logs
 `consoleUser`, `processUser`, and `consoleMismatch` in the diagnostic log, so
-this case is distinguishable from a stale post-update grant.
+this case is distinguishable from a stale post-update grant. The notice and the
+system alert always show the same two labeled sections, **possible problem** and
+**how to fix**, tailored to the current state (same-account denial, another
+console account, or a transient publication failure), so the interface always
+explains both what went wrong and what to do next.
 
 The Bluetooth PSM characteristic is dynamic: it returns the currently published
 channel number, and returns no value after that publication is stopped. The Mac

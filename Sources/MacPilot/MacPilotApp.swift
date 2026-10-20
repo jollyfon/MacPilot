@@ -579,9 +579,15 @@ enum AppText {
         "remoteNetworkPermissionDenied": "设备发现被系统阻止",
         "remoteNetworkFailed": "设备发现暂不可用 · 错误 %d",
         "remoteNetworkPermissionHint": "MacPilot 需要本地网络权限，才能让 PilotNest 发现并连接这台 Mac。首次使用时，请在系统提示中选择“允许”。",
-        "remoteNetworkDeniedHint": "macOS 拒绝了 MacPilot 这次的设备发现请求（错误 -65570），即使“本地网络”开关已经开启。应用更新后，系统可能保留旧的授权状态。请先重新打开 MacPilot；如果仍被拒绝，退出 MacPilot 后把“隐私与安全 → 本地网络”里的开关关闭再打开，然后重新启动。已有配对会保留。",
-        "remoteNetworkOtherConsoleUserHint": "本地网络的授权由控制台账户「%1$@」决定，而 MacPilot 正在「%2$@」的会话中运行。macOS 正在套用「%1$@」的拒绝结果，所以在「%2$@」里重新打开 MacPilot 或重置本地网络开关都不会生效。请切换到「%1$@」（或注销该账户），在它的“系统设置 → 隐私与安全性 → 本地网络”中允许 MacPilot，然后切回「%2$@」重新打开 MacPilot。已有配对会保留。",
-        "remoteNetworkFailedHint": "MacPilot 暂时无法发布设备发现服务，正在自动重试。已有配对会保留。",
+        "remoteNetworkNoticeTitle": "远程控制暂时不可用",
+        "remoteNetworkNoticeProblemLine": "可能的问题：%1$@",
+        "remoteNetworkNoticeStepsLine": "处理方法：%1$@",
+        "remoteNetworkDeniedProblem": "macOS 拒绝了 MacPilot 这次的设备发现请求（错误 -65570），即使“本地网络”开关已经开启。应用更新后，系统可能保留旧的授权状态。",
+        "remoteNetworkDeniedSteps": "先重新打开 MacPilot；如果仍被拒绝，退出 MacPilot，在“系统设置 → 隐私与安全性 → 本地网络”中把 MacPilot 的开关关闭再打开，然后重新启动。已有配对会保留。",
+        "remoteNetworkOtherConsoleUserProblem": "本地网络的授权属于控制台账户「%1$@」，而 MacPilot 正在「%2$@」的会话中运行，macOS 正在套用「%1$@」的拒绝结果。",
+        "remoteNetworkOtherConsoleUserSteps": "切换到「%1$@」（或注销该账户），在它的“系统设置 → 隐私与安全性 → 本地网络”中允许 MacPilot，然后切回「%2$@」并重新打开 MacPilot。在「%2$@」里重开应用或重置开关不会生效；已有配对会保留。",
+        "remoteNetworkFailedProblem": "MacPilot 暂时无法发布设备发现服务，可能是网络切换、VPN 或防火墙拦截造成的。",
+        "remoteNetworkFailedSteps": "检查当前网络、VPN 与防火墙设置；MacPilot 会自动重试，持续失败时重新打开 MacPilot。已有配对会保留。",
         "remoteOpenLocalNetworkSettings": "打开本地网络设置",
         "remoteRelaunchMacPilot": "重新打开 MacPilot",
         "remoteScreenState": "屏幕状态",
@@ -1824,9 +1830,15 @@ enum AppText {
             "remoteNetworkPermissionDenied": "Discovery blocked by the system",
             "remoteNetworkFailed": "Discovery unavailable · error %d",
             "remoteNetworkPermissionHint": "MacPilot needs local network access so PilotNest can discover and connect to this Mac. Choose Allow in the system prompt when using it for the first time.",
-            "remoteNetworkDeniedHint": "macOS is rejecting MacPilot's discovery request for this run (error -65570), even when Local Network is already on. After an app update the system can keep the previous authorization state. Reopen MacPilot first. If discovery is still rejected, quit MacPilot, switch Local Network off and back on in Privacy & Security → Local Network, then reopen it. Existing pairings are kept.",
-            "remoteNetworkOtherConsoleUserHint": "The Local Network decision belongs to the console account “%1$@”, while MacPilot is running in “%2$@”’s session. macOS is applying “%1$@”’s denial, so reopening MacPilot or toggling Local Network in “%2$@” cannot change it. Switch to “%1$@” (or log that account out), allow MacPilot in its System Settings → Privacy & Security → Local Network, then switch back to “%2$@” and reopen MacPilot. Existing pairings are kept.",
-            "remoteNetworkFailedHint": "MacPilot cannot publish its discovery service right now and is retrying automatically. Existing pairings are kept.",
+            "remoteNetworkNoticeTitle": "Remote control is unavailable",
+            "remoteNetworkNoticeProblemLine": "Possible problem: %1$@",
+            "remoteNetworkNoticeStepsLine": "How to fix: %1$@",
+            "remoteNetworkDeniedProblem": "macOS rejected MacPilot's discovery request for this run (error -65570), even though Local Network is on. After an app update the system can keep the previous authorization state.",
+            "remoteNetworkDeniedSteps": "Reopen MacPilot first. If discovery is still rejected, quit MacPilot, switch its Local Network toggle off and back on in System Settings → Privacy & Security → Local Network, then reopen it. Existing pairings are kept.",
+            "remoteNetworkOtherConsoleUserProblem": "The Local Network permission belongs to the console account “%1$@”, while MacPilot is running in “%2$@”’s session, so macOS is applying “%1$@”’s denial.",
+            "remoteNetworkOtherConsoleUserSteps": "Switch to “%1$@” (or log that account out), allow MacPilot in its System Settings → Privacy & Security → Local Network, then switch back to “%2$@” and reopen MacPilot. Reopening the app or resetting the toggle in “%2$@” cannot change it. Existing pairings are kept.",
+            "remoteNetworkFailedProblem": "MacPilot cannot publish its discovery service right now, possibly because of a network change, VPN, or firewall.",
+            "remoteNetworkFailedSteps": "Check the current network, VPN, and firewall settings. MacPilot retries automatically; reopen it if the failure continues. Existing pairings are kept.",
             "remoteOpenLocalNetworkSettings": "Open Local Network Settings",
             "remoteRelaunchMacPilot": "Reopen MacPilot",
             "remoteScreenState": "Screen",
@@ -2530,13 +2542,20 @@ final class MacPilotModel: ObservableObject {
                 consoleUser: self.remoteControl.localNetworkConsoleUser,
                 processUser: LocalNetworkSessionDiagnosis.processUserName()
             ) {
-                self.showAlert(self.t(
-                    "remoteNetworkOtherConsoleUserHint",
-                    consoleUser,
-                    LocalNetworkSessionDiagnosis.processUserName()
-                ))
+                let processUser = LocalNetworkSessionDiagnosis.processUserName()
+                let problem = self.t("remoteNetworkOtherConsoleUserProblem", consoleUser, processUser)
+                let steps = self.t("remoteNetworkOtherConsoleUserSteps", consoleUser, processUser)
+                self.showAlert(
+                    self.t("remoteNetworkNoticeProblemLine", problem)
+                        + "\n\n"
+                        + self.t("remoteNetworkNoticeStepsLine", steps)
+                )
             } else {
-                self.showAlert(self.t("remoteNetworkDeniedHint"))
+                self.showAlert(
+                    self.t("remoteNetworkNoticeProblemLine", self.t("remoteNetworkDeniedProblem"))
+                        + "\n\n"
+                        + self.t("remoteNetworkNoticeStepsLine", self.t("remoteNetworkDeniedSteps"))
+                )
                 self.alertOffersLocalNetworkSettings = true
                 self.alertOffersRelaunch = true
             }

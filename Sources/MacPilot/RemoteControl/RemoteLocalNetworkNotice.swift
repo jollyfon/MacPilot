@@ -8,12 +8,18 @@ struct RemoteLocalNetworkNotice: View {
     @ObservedObject var server: RemoteControlServer
 
     var body: some View {
-        if hintKey != nil {
+        if let content {
             VStack(alignment: .leading, spacing: 10) {
-                Label(model.t("remoteControl"), systemImage: "exclamationmark.triangle")
+                Label(model.t("remoteNetworkNoticeTitle"), systemImage: "exclamationmark.triangle")
                     .font(.headline)
-                Text(hintText).font(.subheadline)
-                if server.bonjourStatus == .permissionDenied, otherConsoleUser == nil {
+                Text(line("remoteNetworkNoticeProblemLine", content.problemKey, content.arguments))
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(line("remoteNetworkNoticeStepsLine", content.stepsKey, content.arguments))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if content.isCurrentConsoleAccountDenied {
                     HStack {
                         Button(model.t("remoteRelaunchMacPilot")) { Self.relaunch() }
                             .macPilotProminentButtonStyle()
@@ -28,21 +34,57 @@ struct RemoteLocalNetworkNotice: View {
         }
     }
 
-    private var hintKey: String? {
-        switch server.bonjourStatus {
-        case .permissionDenied:
-            return otherConsoleUser == nil
-                ? "remoteNetworkDeniedHint"
-                : "remoteNetworkOtherConsoleUserHint"
-        case .failed: return "remoteNetworkFailedHint"
-        default: return nil
+    private enum Content {
+        case currentConsoleAccountDenied
+        case otherConsoleUser(console: String, process: String)
+        case failed
+
+        var problemKey: String {
+            switch self {
+            case .currentConsoleAccountDenied: return "remoteNetworkDeniedProblem"
+            case .otherConsoleUser: return "remoteNetworkOtherConsoleUserProblem"
+            case .failed: return "remoteNetworkFailedProblem"
+            }
+        }
+
+        var stepsKey: String {
+            switch self {
+            case .currentConsoleAccountDenied: return "remoteNetworkDeniedSteps"
+            case .otherConsoleUser: return "remoteNetworkOtherConsoleUserSteps"
+            case .failed: return "remoteNetworkFailedSteps"
+            }
+        }
+
+        var arguments: [CVarArg] {
+            switch self {
+            case .currentConsoleAccountDenied, .failed: return []
+            case let .otherConsoleUser(console, process): return [console, process]
+            }
+        }
+
+        var isCurrentConsoleAccountDenied: Bool {
+            if case .currentConsoleAccountDenied = self { return true }
+            return false
         }
     }
 
-    private var hintText: String {
-        guard let hintKey else { return "" }
-        guard let otherConsoleUser else { return model.t(hintKey) }
-        return model.t(hintKey, otherConsoleUser, LocalNetworkSessionDiagnosis.processUserName())
+    private var content: Content? {
+        switch server.bonjourStatus {
+        case .permissionDenied:
+            guard let otherConsoleUser else { return .currentConsoleAccountDenied }
+            return .otherConsoleUser(
+                console: otherConsoleUser,
+                process: LocalNetworkSessionDiagnosis.processUserName()
+            )
+        case .failed:
+            return .failed
+        default:
+            return nil
+        }
+    }
+
+    private func line(_ labelKey: String, _ bodyKey: String, _ arguments: [CVarArg]) -> String {
+        model.t(labelKey, AppText.value(bodyKey, language: model.language, arguments: arguments))
     }
 
     /// Reopening the app or toggling the switch in this account cannot override
