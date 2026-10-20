@@ -31,8 +31,9 @@ enum QuickSearchPanelLayout {
     static let preferredVisibleRows = 9
     static let searchFieldHeight: CGFloat = 46
     static let footerHeight: CGFloat = 34
-    /// 顶栏抓手条：只用来拖动，不做标题。
-    static let headerHeight: CGFloat = 22
+    /// 顶栏抓手条：只用来拖动，不做标题。贴着圆角的高度就够，
+    /// 再高就变成输入框上方一条空带。
+    static let headerHeight: CGFloat = 16
 }
 
 // MARK: - 按键分流
@@ -123,7 +124,7 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
 
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: QuickSearchPanelLayout.defaultWidth, height: 380),
-            styleMask: [.nonactivatingPanel],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -142,6 +143,12 @@ final class QuickSearchPanel: NSPanel, QuickSearchPanelPresenting, NSWindowDeleg
         isMovable = true
         delegate = self
         contentView = hostingView
+        // 窗口阴影按内容层的可见轮廓生成。hosting view 自己按圆角裁一次，
+        // 系统就不会再给整块矩形窗口描一圈直角边。
+        hostingView.wantsLayer = true
+        hostingView.layer?.cornerRadius = QuickSearchPanelLayout.cornerRadius
+        hostingView.layer?.cornerCurve = .continuous
+        hostingView.layer?.masksToBounds = true
     }
 
     override var canBecomeKey: Bool { true }

@@ -32,7 +32,7 @@ struct QuickSearchPanelContent: View {
 
             inputRow
                 .padding(.horizontal, 12)
-                .padding(.top, 4)
+                .padding(.top, 2)
                 .padding(.bottom, 8)
 
             sectionDivider
@@ -51,6 +51,12 @@ struct QuickSearchPanelContent: View {
         .background {
             panelSurface
         }
+        // 背景已经是圆角，这里再把整个内容层裁到同一轮廓：
+        // 任何一层（包括材质的背板）都不该在窗口边缘留下直角。
+        .clipShape(RoundedRectangle(
+            cornerRadius: QuickSearchPanelLayout.cornerRadius,
+            style: .continuous
+        ))
         .overlay {
             QuickSearchPanelResizeHandle()
         }
@@ -62,20 +68,15 @@ struct QuickSearchPanelContent: View {
         }
     }
 
-    /// 面板本体只有一层：macOS 26 用系统液态玻璃，旧系统退回材质。
-    /// 不再额外叠描边——圆角已经是面板的边界，多加一圈只会看着像框。
-    @ViewBuilder
+    /// 面板本体只有一层材质，与剪贴板面板保持一致。
+    /// 不用窗口级液态玻璃：玻璃背板会让窗口在圆角之外再描一圈直角边，
+    /// 正是输入框下方那条多余的框线。也不额外叠描边——圆角就是面板的边界。
     private var panelSurface: some View {
-        let shape = RoundedRectangle(
+        RoundedRectangle(
             cornerRadius: QuickSearchPanelLayout.cornerRadius,
             style: .continuous
         )
-        if #available(macOS 26.0, *) {
-            Color.clear
-                .glassEffect(.regular, in: shape)
-        } else {
-            shape.fill(.ultraThinMaterial)
-        }
+        .fill(.ultraThinMaterial)
     }
 
     /// 区块之间只用一根发丝线分隔，不再给每段铺一层背景。
@@ -106,7 +107,7 @@ struct QuickSearchPanelContent: View {
                         Image(systemName: "arrow.counterclockwise")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.tertiary)
-                            .frame(width: 22, height: 22)
+                            .frame(width: 16, height: 16)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
