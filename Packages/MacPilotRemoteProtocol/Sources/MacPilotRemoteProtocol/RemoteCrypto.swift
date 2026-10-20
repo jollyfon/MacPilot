@@ -151,6 +151,13 @@ public enum RemoteCrypto {
         return key.withUnsafeBytes { Data($0) }
     }
 
+    /// Keyed digest used by challenge-response proofs. The pairing key itself
+    /// never travels; a fresh challenge nonce makes every response single use.
+    public static func hmacSHA256(key: Data, data: Data) -> Data {
+        let tag = HMAC<SHA256>.authenticationCode(for: data, using: SymmetricKey(data: key))
+        return Data(tag)
+    }
+
     /// Length independent, constant time comparison. `Data ==` short-circuits
     /// on the first differing byte.
     public static func constantTimeEquals(_ lhs: Data, _ rhs: Data) -> Bool {

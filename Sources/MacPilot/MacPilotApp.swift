@@ -2503,6 +2503,12 @@ final class MacPilotModel: ObservableObject {
         updater.isVersionSwitchInProgress = { [weak self] in self?.isVersionSwitching ?? false }
         isLoading = true
         load()
+        // BLE Unlock proves a rotated phone address with the pairing key, so a
+        // pocketed phone that never opens PilotNest can still unlock the Mac.
+        ble.remoteOwnDeviceIDProvider = { [weak self] in self?.remoteDeviceStore.deviceID }
+        ble.remotePairingKeyProvider = { [weak self] clientID in
+            self?.remoteDeviceStore.pairingKey(for: clientID)
+        }
         ble.reconcileRemoteIdentities(remoteDeviceStore.pairedIdentityFingerprints)
         updater.setChannel(updateChannel)
         isLoading = false

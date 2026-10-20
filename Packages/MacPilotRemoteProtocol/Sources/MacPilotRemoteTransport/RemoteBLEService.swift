@@ -20,6 +20,10 @@ public enum RemoteBLEService {
     /// read on purpose: the PSM read already works in environments where the
     /// encrypted L2CAP channel refuses to open.
     public nonisolated(unsafe) static let identityClaimCharacteristicUUID = CBUUID(string: "6D616350-696C-6F74-0001-000000000003")
+    /// Read/write. The Mac writes a fresh challenge and reads back the phone's
+    /// keyed proof, so a rotated BLE address can be authenticated without any
+    /// foreground app or network session.
+    public nonisolated(unsafe) static let presenceChallengeCharacteristicUUID = CBUUID(string: "6D616350-696C-6F74-0001-000000000004")
 
     /// The PSM as it travels on the wire.
     public static func encodePSM(_ psm: CBL2CAPPSM) -> Data {

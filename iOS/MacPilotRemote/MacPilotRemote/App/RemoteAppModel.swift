@@ -306,6 +306,15 @@ final class RemoteAppModel: ObservableObject {
             self.bleFallbackAdvertising = self.ble.isAdvertising
         }
         ble.onChannel = { [weak self] channel in self?.adoptBLEChannel(channel) }
+        // A rotated BLE address is authenticated by the Mac with a fresh
+        // challenge. Answering needs only the long-term key, so it works while
+        // PilotNest is asleep in the background.
+        ble.onPresenceChallenge = { challenge in
+            guard let key = RemoteKeychain.pairingKey(for: challenge.macID.uuidString) else {
+                return nil
+            }
+            return challenge.response(pairingKey: key)
+        }
 
         if let preferred = store.preferredMac {
             activeMac = preferred

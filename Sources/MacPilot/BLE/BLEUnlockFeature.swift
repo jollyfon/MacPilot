@@ -93,6 +93,10 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     @Published private(set) var otherInstanceCount = 0
 
     var settings = BLEUnlockSettings()
+    /// The stable Mac identity and the pairing key for a remote client. Wired
+    /// by the app so this model never touches the Keychain itself.
+    var remoteOwnDeviceIDProvider: (@MainActor () -> UUID?)?
+    var remotePairingKeyProvider: (@MainActor (String) -> Data?)?
 
     private let bluetoothScanner: any BluetoothScanning
     private var centralMgr: CBCentralManager? {
@@ -124,6 +128,38 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     }
     private var unlockAttemptTask: Task<Void, Never>?
     private var unlockAttemptSlot = BLEUnlockAttemptSlot()
+    /// Learns rotated phone addresses over GATT. Its own central keeps the
+    /// monitoring scan's deduplication and connection policy untouched.
+    private lazy var presenceAuthenticator: BLEPresenceAuthenticator = {
+        let authenticator = BLEPresenceAuthenticator()
+        authenticator.onLog = { [weak self] message in self?.log(message) }
+        authenticator.bindingProvider = { [weak self] in
+            guard let self else { return [] }
+            return self.settings.identityRegistry.bindings.map {
+                BLEPresenceAuthenticator.Binding(
+                    clientID: $0.clientID,
+                    keyFingerprint: $0.keyFingerprint
+                )
+            }
+        }
+        authenticator.pairingKeyProvider = { [weak self] clientID in
+            self?.remotePairingKeyProvider?(clientID)
+        }
+        authenticator.macIDProvider = { [weak self] in
+            self?.remoteOwnDeviceIDProvider?()
+        }
+        authenticator.isMonitored = { [weak self] uuid in
+            self?.monitoredUUIDs.contains(uuid) ?? true
+        }
+        authenticator.onAuthenticated = { [weak self] clientID, keyFingerprint, peripheralUUID in
+            self?.learnAuthenticatedBLEIdentity(
+                clientID: clientID,
+                keyFingerprint: keyFingerprint,
+                peripheralUUID: peripheralUUID
+            )
+        }
+        return authenticator
+    }()
     /// Internal so tests can seed a latched cycle without starting real unlock work.
     var unlockSignalTrigger = BLEUnlockSignalTrigger()
     private var lastLoggedRSSIAt = Date.distantPast
@@ -351,7 +387,22 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         startLivenessTimer()
         startMonitoringDiscoveryTimer()
         scanForPeripherals()
+        updatePresenceAuthentication()
         logSettings("monitoring started")
+    }
+
+    /// The authenticator exists only while an identity binding is configured.
+    /// It never creates its radio just because the feature is enabled: the
+    /// monitoring scanner already owns that moment, and pairing a phone is
+    /// what makes a challenge meaningful.
+    private func updatePresenceAuthentication() {
+        let shouldRun = settings.isEnabled
+            && sessionIsOnConsole
+            && centralMgr != nil
+            && !settings.identityRegistry.bindings.isEmpty
+            && remoteOwnDeviceIDProvider != nil
+            && remotePairingKeyProvider != nil
+        presenceAuthenticator.setActive(shouldRun)
     }
 
     // MARK: Settings mutations
@@ -380,6 +431,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         let manualLockWasSuppressed = manualLock
         recomputePresence(reason: "identityBindingChanged")
         manualLock = manualLockWasSuppressed
+        updatePresenceAuthentication()
         notifyChange()
     }
 
@@ -392,6 +444,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         let manualLockWasSuppressed = manualLock
         recomputePresence(reason: "identityRevoked")
         manualLock = manualLockWasSuppressed
+        updatePresenceAuthentication()
         notifyChange()
     }
 
@@ -499,6 +552,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     func shutdown() {
         stopMonitoring()
         stopObservingSystemState()
+        presenceAuthenticator.shutdown()
         screenControl.shutdown()
     }
 
@@ -714,6 +768,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         lastMonitoringDiscoveryAt = nil
         advertisementStreamStalled = false
         otherInstanceCount = 0
+        presenceAuthenticator.setActive(false)
         // Drop the CoreBluetooth central too: holding it keeps a Bluetooth XPC
         // session (and its delegate graph) alive for nothing while the feature
         // is off. `ensureCentralManager()` recreates it on the next enable.
@@ -1254,6 +1309,7 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
                     scanForPeripherals()
                 }
                 if let central = centralMgr { restoreKnownMonitoredPeripherals(using: central) }
+                updatePresenceAuthentication()
             } else if isScanning {
                 scanForPeripherals()
             }

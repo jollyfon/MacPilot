@@ -21,6 +21,9 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     /// Delivers an open L2CAP channel. Ownership passes to the caller.
     var onChannel: ((CBL2CAPChannel) -> Void)?
     var onLog: ((String) -> Void)?
+    /// Answers a Mac's GATT challenge with a keyed proof for the addressed
+    /// pairing key. Returning nil refuses the challenge.
+    var onPresenceChallenge: ((RemoteBLEPresenceChallenge) -> Data?)?
 
     private var manager: CBPeripheralManager?
     private var psmReadState = RemoteBLEPSMReadState()
@@ -33,6 +36,9 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     /// characteristic until its validity window ends. Never logged.
     private var identityClaimToken: Data?
     private var identityClaimExpiryTask: Task<Void, Never>?
+    /// Latest proof served to a reading Mac. Empty when the last challenge was
+    /// refused, which the Mac treats as "not my phone".
+    private var presenceChallengeResponse = Data()
     #if DEBUG
     private var diagnosticTransport: L2CAPStreamTransport?
     private var isEchoDiagnostic: Bool {
@@ -109,6 +115,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
         identityClaimExpiryTask?.cancel()
         identityClaimExpiryTask = nil
         identityClaimToken = nil
+        presenceChallengeResponse = Data()
         wantsToRun = false
         isOnAir = false
         guard let manager else { return }
@@ -129,8 +136,18 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
     /// from the current publication state below.
     private func publishService(on manager: CBPeripheralManager) {
         let characteristic = RemoteBLEPSMCharacteristic.make()
+        let presence = CBMutableCharacteristic(
+            type: RemoteBLEService.presenceChallengeCharacteristicUUID,
+            properties: [.read, .write],
+            value: nil,
+            permissions: [.readable, .writeable]
+        )
         let service = CBMutableService(type: RemoteBLEService.serviceUUID, primary: true)
-        service.characteristics = [characteristic, RemoteBLEIdentityClaimCharacteristic.make()]
+        service.characteristics = [
+            characteristic,
+            RemoteBLEIdentityClaimCharacteristic.make(),
+            presence
+        ]
         publishedService = service
         manager.add(service)
     }
@@ -163,6 +180,7 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             psmReadState.clear()
             isPublishing = false
             publishedService = nil
+            presenceChallengeResponse = Data()
             onLog?("BLE waiting for Bluetooth: state=\(peripheral.state.rawValue)")
         }
     }
@@ -242,8 +260,42 @@ final class RemoteBLEPeripheral: NSObject, @preconcurrency CBPeripheralManagerDe
             request.value = identityClaimToken ?? Data()
             onLog?("BLE the Mac read the identity claim")
             peripheral.respond(to: request, withResult: .success)
+        case RemoteBLEService.presenceChallengeCharacteristicUUID:
+            guard request.offset == 0 else {
+                peripheral.respond(to: request, withResult: .invalidOffset)
+                return
+            }
+            request.value = presenceChallengeResponse
+            peripheral.respond(to: request, withResult: .success)
         default:
             peripheral.respond(to: request, withResult: .requestNotSupported)
+        }
+    }
+
+    /// The Mac writes a fresh nonce and reads back the keyed proof. The
+    /// response is bound to its Mac identity and this nonce, so a captured
+    /// response cannot authenticate any later connection.
+    func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
+        for request in requests {
+            guard wantsToRun else {
+                peripheral.respond(to: request, withResult: .requestNotSupported)
+                continue
+            }
+            guard request.characteristic.uuid == RemoteBLEService.presenceChallengeCharacteristicUUID else {
+                peripheral.respond(to: request, withResult: .requestNotSupported)
+                continue
+            }
+            guard request.offset == 0,
+                  let value = request.value,
+                  let challenge = RemoteBLEPresenceChallenge(encoded: value) else {
+                peripheral.respond(to: request, withResult: .invalidAttributeValueLength)
+                continue
+            }
+            let response = onPresenceChallenge?(challenge) ?? Data()
+            presenceChallengeResponse = response
+            (request.characteristic as? CBMutableCharacteristic)?.value = response
+            onLog?("BLE presence challenge answered mac=\(challenge.macID.uuidString) accepted=\(!response.isEmpty)")
+            peripheral.respond(to: request, withResult: .success)
         }
     }
 

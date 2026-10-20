@@ -640,6 +640,22 @@ command and an older Mac never advertises it. Reading the token is an ordinary
 unencrypted GATT read, exactly like the PSM read; the token is meaningless
 without the authenticated session that armed it and is never logged.
 
+iOS rotates the advertised BLE address, and every rotation appears to the Mac as
+a new `CBPeripheral.identifier`. The foreground claim cannot cover a phone sitting
+in a pocket with PilotNest closed, which is exactly when proximity unlock is
+needed. A second GATT characteristic closes that gap: the Mac writes
+`version ‖ 16-byte nonce ‖ its raw device UUID`, the phone answers with
+HMAC-SHA256 of `"MacPilotRemote-v1-ble-presence" ‖ device UUID ‖ nonce` under the
+long-term pairing key, and the Mac verifies the proof with the bound client's key
+before learning the address it just observed. The nonce is fresh per attempt and
+the UUID binds the proof to one Mac, so a captured response authenticates
+nothing. The phone answers with `bluetooth-peripheral` background mode, without a
+network session or any user interaction. This proves identity, never proximity:
+the learned address still has to produce ordinary RSSI samples above the unlock
+threshold. Older phones lack the characteristic; the Mac logs
+`reason=phoneDoesNotChallenge` and keeps the foreground claim path, so the
+addition is wire-compatible in both directions.
+
 ## Performance
 
 - **Fast path.** The iPhone still stores the host and port it last reached the Mac
