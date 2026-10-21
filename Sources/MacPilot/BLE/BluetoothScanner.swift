@@ -16,6 +16,32 @@ enum BLEScanPolicy {
         min(10, max(1, TimeInterval(signalTimeout) / 3))
     }
 
+    /// A last sample at least this close means the phone was still on the desk
+    /// when its advertisements stopped. iOS pauses background advertising
+    /// around a privacy-address rotation, and those gaps look identical to a
+    /// departure in the raw RSSI stream.
+    static let nearbySignalRSSI = -65
+
+    /// How long discovery may keep verifying after the no-signal timeout.
+    ///
+    /// A phone last heard next to the Mac gets a second bounded window: its
+    /// silence is far more likely a suspended advertisement than a walk-away,
+    /// and the address-rotation gaps observed in Diagnostics.log reach ~200
+    /// seconds after the timeout fires. A weak last sample keeps the short
+    /// rediscovery check, so a real departure still locks promptly; proximity
+    /// lock handles a phone that fades while being carried away. The extra
+    /// window is capped in absolute terms to keep a phone that truly died from
+    /// holding the Mac unlocked indefinitely.
+    static func signalLossVerificationDelay(
+        signalTimeout: Int,
+        lastRSSI: Int?,
+        nearbyRSSI: Int = nearbySignalRSSI
+    ) -> TimeInterval {
+        let rediscovery = rediscoveryInterval(signalTimeout: signalTimeout)
+        guard let lastRSSI, lastRSSI >= nearbyRSSI else { return rediscovery }
+        return max(rediscovery, min(TimeInterval(signalTimeout) * 4, 240))
+    }
+
     static func needsAdvertisements(connectionState: CBPeripheralState?, hasRSSIPoller: Bool) -> Bool {
         connectionState != .connected || !hasRSSIPoller
     }

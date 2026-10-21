@@ -1008,14 +1008,18 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         // just before its own 60-second connection deadline could finish.
         if runtime.presence, !runtime.verifyingSignalLoss,
            settings.lockRSSI != Self.lockDisabled, !isScreenLocked(), !activeConnectionsPaused, !systemSleep {
+            let lastRSSI = runtime.lastRSSI
             runtime.verifyingSignalLoss = true
             runtime.lastRSSI = nil
             runtime.latestRSSIs.removeAll(keepingCapacity: true)
             runtime.cancelProximityTimer()
             refreshPublishedMonitoringState()
-            let delay = BLEScanPolicy.rediscoveryInterval(signalTimeout: settings.signalTimeout)
+            let delay = BLEScanPolicy.signalLossVerificationDelay(
+                signalTimeout: settings.signalTimeout,
+                lastRSSI: lastRSSI
+            )
             resetSignalTimer(for: uuid, minimumDelay: 0, delayOverride: delay)
-            log("signal loss verification started uuid=\(uuid.uuidString) seconds=\(delay) preservingConnections=true")
+            log("signal loss verification started uuid=\(uuid.uuidString) seconds=\(delay) lastRSSI=\(lastRSSI.map(String.init) ?? "none") nearby=\(lastRSSI.map { $0 >= BLEScanPolicy.nearbySignalRSSI } ?? false) preservingConnections=true")
             refreshMonitoringDiscovery(reason: "signalLossVerification")
             return
         }

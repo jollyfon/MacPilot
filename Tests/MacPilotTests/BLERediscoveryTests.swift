@@ -70,11 +70,11 @@ struct BLERediscoveryTests {
 
         let phoneVerification = try #require(h.signalActions.dropLast().last)
         let watchVerification = try #require(h.signalActions.last)
-        #expect(phoneVerification.delay == 10)
-        #expect(watchVerification.delay == 10)
+        #expect(phoneVerification.delay == 240)
+        #expect(watchVerification.delay == 240)
         h.now += 5
         h.model.receiveMonitoredAdvertisement(-52, for: h.watch)
-        h.now += 5
+        h.now += 235
         phoneVerification.action()
         watchVerification.action() // stale callback must not erase the new watch signal
         #expect(h.model.presence)
@@ -92,13 +92,26 @@ struct BLERediscoveryTests {
         h.model.handleMonitoredSignalTimeout(for: h.phone)
         h.model.handleMonitoredSignalTimeout(for: h.watch)
         let confirmations = Array(h.signalActions.suffix(2))
+        #expect(confirmations.map(\.delay) == [240, 240])
         #expect(h.locks.isEmpty)
-        h.now += 10
+        // A phone last heard nearby still has to disappear after one bounded
+        // window; the rotation tolerance must never be open-ended.
+        h.now += 240
         for confirmation in confirmations { confirmation.action() }
         #expect(!h.model.presence)
         #expect(h.model.lastRSSI == nil)
         #expect(h.locks == [.bleAutomatic])
         #expect(h.scanner.centralResets == 0)
+    }
+
+    @Test func nearbySignalLossAddsABoundedWindowButAFadingPhoneKeepsTheShortOne() {
+        #expect(BLEScanPolicy.signalLossVerificationDelay(signalTimeout: 60, lastRSSI: -50) == 240)
+        #expect(BLEScanPolicy.signalLossVerificationDelay(signalTimeout: 60, lastRSSI: -65) == 240)
+        #expect(BLEScanPolicy.signalLossVerificationDelay(signalTimeout: 60, lastRSSI: -66) == 10)
+        #expect(BLEScanPolicy.signalLossVerificationDelay(signalTimeout: 60, lastRSSI: -80) == 10)
+        #expect(BLEScanPolicy.signalLossVerificationDelay(signalTimeout: 60, lastRSSI: nil) == 10)
+        #expect(BLEScanPolicy.signalLossVerificationDelay(signalTimeout: 30, lastRSSI: -50) == 120)
+        #expect(BLEScanPolicy.signalLossVerificationDelay(signalTimeout: 300, lastRSSI: -50) == 240)
     }
 
     @Test func repeatedRediscoveryDoesNotExtendTheConfiguredSignalDeadline() throws {
@@ -150,7 +163,7 @@ struct BLERediscoveryTests {
         renewedAction.action()
         #expect(runtime.verifyingSignalLoss)
         #expect(h.locks.isEmpty)
-        #expect(h.signalActions.last?.delay == 10, "A real timeout still enters the bounded rediscovery check")
+        #expect(h.signalActions.last?.delay == 240, "A near last sample still enters a bounded rediscovery check")
     }
 
     @Test func shorteningSignalDeadlineRearmsEarlierAndRejectsTheOldCallback() throws {
@@ -208,7 +221,7 @@ struct BLERediscoveryTests {
         h.model.handleMonitoredSignalTimeout(for: h.phone)
         let confirmation = try #require(h.signalActions.last)
         h.model.receiveMonitoredAdvertisement(-45, for: h.watch)
-        h.now += 10
+        h.now += 240
         confirmation.action()
         #expect(h.model.presence)
         #expect(h.locks.isEmpty)
@@ -224,7 +237,7 @@ struct BLERediscoveryTests {
         h.model.handleMonitoredSignalTimeout(for: h.phone)
         let confirmation = try #require(h.signalActions.last)
         h.model.receiveMonitoredAdvertisement(-45, for: h.watch)
-        h.now += 10
+        h.now += 240
         confirmation.action()
         #expect(!h.model.presence)
         #expect(h.locks == [.bleAutomatic])
