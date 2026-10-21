@@ -241,6 +241,21 @@ struct QuickAccessTests {
         #expect(!QuickAccessPinChromeVisibility.isVisible(mouseInside: false, isDraggingFile: false))
     }
 
+    @Test @MainActor func firstPressOnAPinDragsInsteadOfOnlyActivatingTheWindow() {
+        // 贴图浮在别的 App 上时窗口是 inactive 的。拖动面若拒绝 first mouse，
+        // 第一次按下只会把窗口激活、事件被吞掉，用户得再拖一次才动。
+        let view = QuickAccessPinWindowDragNSView(
+            isEnabled: true,
+            onDoubleClick: {},
+            onContextMenu: { _ in }
+        )
+        #expect(view.acceptsFirstMouse(for: nil))
+
+        // 锁定的贴图要让点击穿过去，不能替下面的 App 接住这一下。
+        view.isEnabled = false
+        #expect(!view.acceptsFirstMouse(for: nil))
+    }
+
     @Test @MainActor func pinHoverYieldsThePointerToAWindowDrawnOnTopOfIt() {
         // 贴图的 hover 只认「指针真的落在贴图上」。WPS 之类下拉选项悬在贴图上方时，
         // 指针虽然在贴图 frame 内，像素却属于那个弹窗；贴图一旦现身、抢下 key window，

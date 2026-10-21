@@ -51,6 +51,13 @@ final class QuickAccessPinWindowDragNSView: NSView {
 
   override var acceptsFirstResponder: Bool { false }
 
+  /// 贴图浮在别的 App 上时是个 inactive window。若这里拒绝 first mouse，
+  /// 第一次按下只会激活窗口、事件被吞掉，用户得再拖一次图才会动；锁定时
+  /// 仍要把点击让给下面的 App。
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+    isEnabled
+  }
+
   override func resetCursorRects() {
     addCursorRect(bounds, cursor: .openHand)
   }
