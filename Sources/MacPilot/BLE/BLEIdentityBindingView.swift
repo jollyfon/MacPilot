@@ -37,7 +37,12 @@ struct BLEIdentityBindingView: View {
                     HStack {
                         Text(alias.uuid).font(.caption.monospaced())
                         Spacer()
-                        Text(alias.lastSeenAt, style: .date).font(.caption)
+                        Text(
+                            alias.lastSeenAt,
+                            format: .dateTime.year().month().day().hour().minute().second()
+                        )
+                        .font(.caption.monospacedDigit())
+                        .lineLimit(1)
                     }
                     .foregroundStyle(.secondary)
                 }
