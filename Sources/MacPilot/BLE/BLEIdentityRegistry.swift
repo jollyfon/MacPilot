@@ -292,6 +292,34 @@ struct BLEIdentityRegistry: Codable, Equatable {
         return result
     }
 
+    /// The address this device is expected to advertise now: the most
+    /// recently authenticated alias, or `nil` before the first rotation.
+    func activeUUID(for primaryUUID: UUID) -> UUID? {
+        guard let binding = bindings.first(where: { Self.uuid($0.primaryUUID) == primaryUUID }) else {
+            return nil
+        }
+        return binding.aliases.compactMap { alias -> (UUID, BLEIdentityAlias)? in
+            guard let uuid = Self.uuid(alias.uuid) else { return nil }
+            return (uuid, alias)
+        }.max { lhs, rhs in
+            if lhs.1.lastSeenAt != rhs.1.lastSeenAt { return lhs.1.lastSeenAt < rhs.1.lastSeenAt }
+            if lhs.1.learnedAt != rhs.1.learnedAt { return lhs.1.learnedAt < rhs.1.learnedAt }
+            return lhs.0.uuidString < rhs.0.uuidString
+        }?.0
+    }
+
+    /// Addresses that need a live observation path right now: the selected
+    /// primary plus the current alias. Historical aliases stay persisted so a
+    /// returning address can be re-authenticated, but each one must not own a
+    /// runtime and signal timer of its own.
+    func monitoredUUIDs(for primaryUUID: UUID) -> [UUID] {
+        var result = [primaryUUID]
+        if let activeUUID = activeUUID(for: primaryUUID), activeUUID != primaryUUID {
+            result.append(activeUUID)
+        }
+        return result
+    }
+
     /// Evaluates each primary device as one logical device: its selected UUID
     /// and all learned aliases are alternatives, while different primaries
     /// remain separate entries for the existing any/all relation policy.

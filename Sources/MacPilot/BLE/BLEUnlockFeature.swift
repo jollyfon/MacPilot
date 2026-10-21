@@ -272,9 +272,14 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         return result
     }
 
+    /// Only the primary and the newest authenticated alias are observed.
+    /// Every rotation used to leave another runtime with its own signal timer,
+    /// so a phone that rotated every ~15 minutes kept a dozen stale timers
+    /// firing recovery scans.
     private var monitoredUUIDs: [UUID] {
         var result: [UUID] = []
-        for uuid in logicalDeviceUUIDs.flatMap({ settings.identityRegistry.uuids(for: $0) }) where !result.contains(uuid) {
+        for uuid in logicalDeviceUUIDs.flatMap({ settings.identityRegistry.monitoredUUIDs(for: $0) })
+        where !result.contains(uuid) {
             result.append(uuid)
         }
         return result
@@ -451,10 +456,30 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
     func learnAuthenticatedBLEIdentity(clientID: String, keyFingerprint: String, peripheralUUID: UUID, now: Date = Date()) {
         guard hasIdentityBinding(clientID: clientID, keyFingerprint: keyFingerprint) else { return }
         let previousUUIDs = Set(monitoredUUIDs)
+        let previousActive = activeAliasByLogicalDevice()
         guard settings.identityRegistry.learn(
             clientID: clientID, keyFingerprint: keyFingerprint, peripheralUUID: peripheralUUID,
             now: now, reservedPrimaryUUIDs: logicalDeviceUUIDs
         ) else { return }
+
+        // A routine address rotation must not look like a departure. Carry the
+        // live observation to the new alias before the retired runtime is
+        // pruned, or the logical device reads as absent for a moment and an
+        // unlocked screen locks on every rotation.
+        let currentActive = activeAliasByLogicalDevice()
+        for (logicalUUID, previousUUID) in previousActive {
+            guard let activeUUID = currentActive[logicalUUID],
+                  activeUUID != previousUUID,
+                  let previousRuntime = monitoredRuntimes[previousUUID] else { continue }
+            let activeRuntime = ensureRuntime(for: activeUUID)
+            activeRuntime.presence = previousRuntime.presence
+            activeRuntime.lastRSSI = previousRuntime.lastRSSI
+            activeRuntime.lastRSSISampledAt = previousRuntime.lastRSSISampledAt
+            activeRuntime.latestRSSIs = previousRuntime.latestRSSIs
+            activeRuntime.signalObservationIsContinuous = previousRuntime.signalObservationIsContinuous
+            log("alias handover from=\(previousUUID.uuidString) to=\(activeUUID.uuidString) presence=\(activeRuntime.presence) lastRSSI=\(activeRuntime.lastRSSI.map(String.init) ?? "none")")
+        }
+
         pruneUnmonitoredAliasRuntimes()
         if !previousUUIDs.subtracting(Set(monitoredUUIDs)).isEmpty {
             // Bounded retention can evict an alias. Never leave its cached
@@ -488,6 +513,16 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
         }
         log("authenticated BLE identity learned uuid=\(peripheralUUID.uuidString) newAlias=\(!added.isEmpty)")
         notifyChange()
+    }
+
+    private func activeAliasByLogicalDevice() -> [UUID: UUID] {
+        var result: [UUID: UUID] = [:]
+        for logicalUUID in logicalDeviceUUIDs {
+            if let activeUUID = settings.identityRegistry.activeUUID(for: logicalUUID) {
+                result[logicalUUID] = activeUUID
+            }
+        }
+        return result
     }
 
     private func pruneUnmonitoredAliasRuntimes() {
@@ -1270,13 +1305,13 @@ final class BLEUnlockModel: NSObject, ObservableObject, ManagedFeature, FeatureR
 
     private func monitoringSignalSnapshot(at now: TimeInterval) -> String {
         logicalDeviceUUIDs.map { logical in
-            let aliases = settings.identityRegistry.uuids(for: logical).map { uuid in
+            let addresses = settings.identityRegistry.monitoredUUIDs(for: logical).map { uuid in
                 guard let runtime = runtime(for: uuid) else { return "\(uuid.uuidString):unobserved" }
                 let age = runtime.lastRSSISampledAt.map { String(format: "%.1f", now - $0) } ?? "none"
                 let state = runtime.peripheral.map { String($0.state.rawValue) } ?? "none"
                 return "\(uuid.uuidString):rssi=\(runtime.lastRSSI.map(String.init) ?? "none"),age=\(age),link=\(state)"
             }.joined(separator: ";")
-            return "\(logical.uuidString)={\(aliases)}"
+            return "\(logical.uuidString)={\(addresses)}"
         }.joined(separator: " ")
     }
 

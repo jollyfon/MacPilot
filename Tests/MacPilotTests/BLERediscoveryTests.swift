@@ -280,6 +280,64 @@ struct BLERediscoveryTests {
         #expect(h.model.diagnosticTaskCount == 0)
     }
 
+    @Test func addressRotationHandsOverTheLiveObservationAndRetiresTheOldTimer() throws {
+        let h = Harness(includeSecondaryDevice: false)
+        defer { h.model.shutdown() }
+        h.model.bindRemoteIdentity(primaryUUID: h.phone, clientID: "phone", keyFingerprint: "test")
+        let firstAlias = UUID()
+        h.model.learnAuthenticatedBLEIdentity(
+            clientID: "phone", keyFingerprint: "test", peripheralUUID: firstAlias,
+            now: Date(timeIntervalSince1970: h.now)
+        )
+        h.model.receiveMonitoredAdvertisement(-50, for: firstAlias)
+        #expect(h.model.presence)
+
+        h.now += 900
+        let rotatedAlias = UUID()
+        h.model.learnAuthenticatedBLEIdentity(
+            clientID: "phone", keyFingerprint: "test", peripheralUUID: rotatedAlias,
+            now: Date(timeIntervalSince1970: h.now)
+        )
+        #expect(h.model.runtime(for: firstAlias) == nil, "A retired address must not keep a runtime or signal timer")
+        let rotatedRuntime = try #require(h.model.runtime(for: rotatedAlias))
+        #expect(rotatedRuntime.presence, "Rotation hands over the observation instead of looking like a departure")
+        #expect(rotatedRuntime.lastRSSI == -50)
+        #expect(h.model.presence)
+        #expect(h.locks.isEmpty)
+
+        h.now += 900
+        h.model.learnAuthenticatedBLEIdentity(
+            clientID: "phone", keyFingerprint: "test", peripheralUUID: firstAlias,
+            now: Date(timeIntervalSince1970: h.now)
+        )
+        #expect(h.model.runtime(for: rotatedAlias) == nil)
+        #expect(h.model.runtime(for: firstAlias)?.presence == true, "A returning address is promoted without a lock")
+        #expect(h.model.presence)
+        #expect(h.locks.isEmpty)
+    }
+
+    @Test func repeatedRotationsLeaveOneAliasRuntimePerLogicalDevice() throws {
+        let h = Harness(includeSecondaryDevice: false)
+        defer { h.model.shutdown() }
+        h.model.bindRemoteIdentity(primaryUUID: h.phone, clientID: "phone", keyFingerprint: "test")
+        var aliases: [UUID] = []
+        for _ in 0..<8 {
+            h.now += 120
+            let alias = UUID()
+            aliases.append(alias)
+            h.model.learnAuthenticatedBLEIdentity(
+                clientID: "phone", keyFingerprint: "test", peripheralUUID: alias,
+                now: Date(timeIntervalSince1970: h.now)
+            )
+        }
+        let current = try #require(aliases.last)
+        #expect(h.model.runtime(for: current) != nil)
+        for retired in aliases.dropLast() {
+            #expect(h.model.runtime(for: retired) == nil)
+        }
+        #expect(h.model.runtime(for: h.phone) != nil, "The selected primary stays monitored for devices that do not rotate")
+    }
+
     @MainActor
     private final class Harness {
         var now: TimeInterval = 100

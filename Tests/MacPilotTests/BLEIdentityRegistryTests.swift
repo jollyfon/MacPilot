@@ -90,6 +90,36 @@ struct BLEIdentityRegistryTests {
         #expect(alias.source == BLEIdentityAlias.authenticatedSource)
     }
 
+    @Test func monitoringTracksOnlyThePrimaryAndNewestAlias() {
+        let primary = uuid("00000000-0000-0000-0000-000000000041")
+        let firstAlias = uuid("00000000-0000-0000-0000-000000000042")
+        let secondAlias = uuid("00000000-0000-0000-0000-000000000043")
+        var registry = BLEIdentityRegistry()
+        registry.bind(primaryUUID: primary, clientID: "phone", keyFingerprint: "key")
+        #expect(registry.activeUUID(for: primary) == nil)
+        #expect(registry.monitoredUUIDs(for: primary) == [primary])
+
+        let firstAliasLearned = registry.learn(
+            clientID: "phone", keyFingerprint: "key", peripheralUUID: firstAlias, now: instant(100)
+        )
+        #expect(firstAliasLearned)
+        let secondAliasLearned = registry.learn(
+            clientID: "phone", keyFingerprint: "key", peripheralUUID: secondAlias, now: instant(200)
+        )
+        #expect(secondAliasLearned)
+        #expect(registry.activeUUID(for: primary) == secondAlias)
+        #expect(registry.monitoredUUIDs(for: primary) == [primary, secondAlias])
+
+        // History is retained for re-authentication, but it is not monitored.
+        #expect(registry.uuids(for: primary) == [primary, firstAlias, secondAlias])
+        let firstAliasPromoted = registry.learn(
+            clientID: "phone", keyFingerprint: "key", peripheralUUID: firstAlias, now: instant(400)
+        )
+        #expect(firstAliasPromoted)
+        #expect(registry.activeUUID(for: primary) == firstAlias)
+        #expect(registry.monitoredUUIDs(for: primary) == [primary, firstAlias])
+    }
+
     @Test func addingTheNinthAliasEvictsTheLeastRecentlySeenAlias() throws {
         let primary = uuid("00000000-0000-0000-0000-000000000031")
         var registry = BLEIdentityRegistry()

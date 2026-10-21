@@ -12,6 +12,11 @@ struct BLEIdentityBindingView: View {
         ble.settings.identityRegistry.bindings.first { $0.primaryUUID == primaryUUID }
     }
 
+    private var activeAliasUUID: UUID? {
+        guard let uuid = UUID(uuidString: primaryUUID) else { return nil }
+        return ble.settings.identityRegistry.activeUUID(for: uuid)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Picker(model.t("bleRemoteIdentity"), selection: Binding(
@@ -36,6 +41,13 @@ struct BLEIdentityBindingView: View {
                 ForEach(identityBinding.aliases, id: \.uuid) { alias in
                     HStack {
                         Text(alias.uuid).font(.caption.monospaced())
+                        if UUID(uuidString: alias.uuid) == activeAliasUUID {
+                            Text(model.t("bleIdentityAliasCurrent"))
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.quaternary, in: Capsule())
+                        }
                         Spacer()
                         Text(
                             alias.lastSeenAt,
