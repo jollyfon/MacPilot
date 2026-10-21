@@ -288,6 +288,71 @@ struct QuickAccessTests {
         ))
     }
 
+    @Test @MainActor func theDockContainerDoesNotCountAsCoveringAPin() {
+        // 主屏上 Dock 进程有一个铺满整屏的容器窗口（layer 20），贴图只有 layer 5。
+        // 覆盖扫描按层级从前到后取第一个包含指针的窗口；把 Dock 的容器当成遮挡，
+        // 主屏上任何位置的贴图都永远不 hover —— 副屏没有这个窗口，所以此前
+        // 只有副屏正常。
+        let dockPID: pid_t = 4_242
+        let pinNumber: CGWindowID = 100
+        let mainHeight: CGFloat = 1080
+        let pointer = CGPoint(x: 500, y: 400)
+
+        func entry(number: CGWindowID, ownerPID: pid_t, level: Int, bounds: CGRect) -> [String: Any] {
+            [
+                kCGWindowNumber as String: NSNumber(value: number),
+                kCGWindowOwnerPID as String: NSNumber(value: ownerPID),
+                kCGWindowLayer as String: NSNumber(value: level),
+                kCGWindowAlpha as String: NSNumber(value: 1),
+                kCGWindowBounds as String: bounds.dictionaryRepresentation
+            ]
+        }
+
+        let dockLevel = Int(CGWindowLevelForKey(.dockWindow))
+        let dock = entry(
+            number: 1, ownerPID: dockPID, level: dockLevel,
+            bounds: CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        )
+        // Quartz bounds 换算回 AppKit 后正好落在 pointer 上：y = 1080 - (480 + 300) = 300。
+        let pin = entry(
+            number: pinNumber, ownerPID: 8_888, level: 5,
+            bounds: CGRect(x: 400, y: 480, width: 400, height: 300)
+        )
+
+        let pinOnly = QuickAccessPinHoverCoverage.surfaces(
+            from: [dock, pin], mainDisplayHeight: mainHeight, dockPID: dockPID
+        )
+        #expect(pinOnly.count == 1)
+        #expect(QuickAccessPinHoverCoverage.isPinExposed(
+            at: pointer, pinWindowNumber: pinNumber, surfaces: pinOnly
+        ))
+
+        // Dock 自己弹出的菜单在弹层上，仍然是合法的遮挡。
+        let dockMenu = entry(
+            number: 2, ownerPID: dockPID, level: 101,
+            bounds: CGRect(x: 450, y: 630, width: 200, height: 100)
+        )
+        let withMenu = QuickAccessPinHoverCoverage.surfaces(
+            from: [dock, dockMenu, pin], mainDisplayHeight: mainHeight, dockPID: dockPID
+        )
+        #expect(withMenu.count == 2)
+        #expect(!QuickAccessPinHoverCoverage.isPinExposed(
+            at: pointer, pinWindowNumber: pinNumber, surfaces: withMenu
+        ))
+
+        // 别的 App 铺满屏幕的窗口仍然算遮挡：只放过 Dock 的容器窗口。
+        let foreign = entry(
+            number: 3, ownerPID: 9_999, level: dockLevel,
+            bounds: CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        )
+        let foreignOnly = QuickAccessPinHoverCoverage.surfaces(
+            from: [foreign, pin], mainDisplayHeight: mainHeight, dockPID: dockPID
+        )
+        #expect(!QuickAccessPinHoverCoverage.isPinExposed(
+            at: pointer, pinWindowNumber: pinNumber, surfaces: foreignOnly
+        ))
+    }
+
     @Test @MainActor func pinCoverageSweepRunsOnEdgesNotOnEveryMouseMove() {
         // 盖没盖住要问 WindowServer，一次一趟全屏幕窗口列表；鼠标每秒上百个事件，
         // 所以只有「答案会变、而且贴图正要采取行动」的那一刻才值得问。

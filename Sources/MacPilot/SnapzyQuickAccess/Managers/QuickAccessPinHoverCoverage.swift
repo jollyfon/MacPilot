@@ -83,6 +83,19 @@ enum QuickAccessPinHoverCoverage {
             ?? CGDisplayBounds(CGMainDisplayID()).height
         guard mainDisplayHeight > 0 else { return [] }
 
+        let dockPID = NSRunningApplication
+            .runningApplications(withBundleIdentifier: "com.apple.dock")
+            .first?.processIdentifier
+        return surfaces(from: info, mainDisplayHeight: mainDisplayHeight, dockPID: dockPID)
+    }
+
+    /// Split out from `liveSurfaces` so the Dock exclusion can be exercised with
+    /// window-server-shaped entries instead of the live list.
+    static func surfaces(
+        from info: [[String: Any]],
+        mainDisplayHeight: CGFloat,
+        dockPID: pid_t?
+    ) -> [Surface] {
         var surfaces: [Surface] = []
         surfaces.reserveCapacity(info.count)
         for entry in info {
@@ -91,6 +104,11 @@ enum QuickAccessPinHoverCoverage {
                   let boundsDictionary = entry[kCGWindowBounds as String] as? NSDictionary,
                   let quartz = CGRect(dictionaryRepresentation: boundsDictionary)?.standardized
             else { continue }
+
+            let ownerPID = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+            let level = (entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
+            guard !isDockSurface(ownerPID: ownerPID, level: level, dockPID: dockPID) else { continue }
+
             surfaces.append(Surface(
                 windowNumber: CGWindowID(number.uint32Value),
                 frame: CGRect(
@@ -102,5 +120,15 @@ enum QuickAccessPinHoverCoverage {
             ))
         }
         return surfaces
+    }
+
+    /// The Dock keeps one container window spanning the whole display for its
+    /// strip and magnification.  Its rectangle therefore claims every pixel on
+    /// the main display even though the Dock only owns the strip — counting it
+    /// as a cover made pins there never see the pointer, while pins on displays
+    /// without a Dock worked.  Dock menus ride at popup levels and still count.
+    static func isDockSurface(ownerPID: pid_t?, level: Int, dockPID: pid_t?) -> Bool {
+        guard let dockPID, ownerPID == dockPID else { return false }
+        return level <= Int(CGWindowLevelForKey(.dockWindow))
     }
 }
