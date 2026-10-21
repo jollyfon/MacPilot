@@ -1,0 +1,7 @@
+{
+  "description": "PilotNest 是 MacPilot 的 iPhone 和 iPad 遥控器。通过局域网连接 Mac，查看远程画面、模拟鼠标触控板和输入文字，还可锁屏、黑屏、解锁或唤醒解锁。近距离没有 Wi-Fi 时，可使用蓝牙保底链路控制；蓝牙不传输远程画面。\n\n主要功能\n• 实时远程画面与双指捏合缩放\n• 相对鼠标触控板、拖拽、多指滚动和压力模拟\n• 远程键盘输入与常用快捷键\n• 一键锁屏 / 黑屏 / 解锁 / 唤醒解锁\n• 多台 Mac 管理、自动发现和 IP / 域名连接\n• 可通过两端已配置的 Tailscale 网络连接异地 Mac\n• 6 位配对码完成首次配对，配对后通信加密\n\n使用前提\n需要在 Mac 上安装 MacPilot，并启用远程控制。远程画面需要屏幕录制权限，鼠标与键盘控制需要辅助功能权限：\nhttps://github.com/misswell/MacPilot\n\n隐私说明\nPilotNest 不收集用户数据。控制通信在配对设备之间加密传输，Mac 的登录密码保存在 Mac 上，不会传输到手机。",
+  "keywords": "mac,锁屏,解锁,黑屏,远程,遥控,唤醒,电脑,专注,助手",
+  "marketingUrl": "https://github.com/misswell/MacPilot",
+  "supportUrl": "https://github.com/misswell/MacPilot/issues",
+  "whatsNew": "让 iPhone 靠近解锁更可靠。\n\n修复\n• PilotNest 退到后台或 Wi-Fi 远控已连接后，仍会为已绑定的 Mac 保持蓝牙广播，靠近时不再找不到手机。\n• iPhone 轮换蓝牙地址后，已配对的 Mac 能在后台重新识别这台手机，不必先打开 App。\n• 选择蓝牙设备时列表会持续刷新，设备不会在一分钟后消失且再也选不到。\n• 蓝牙身份校验只用于确认设备身份，是否解锁仍由距离决定。\n\n蓝牙解锁需配合新版 MacPilot；其余功能仍兼容旧版 Mac。"
+}

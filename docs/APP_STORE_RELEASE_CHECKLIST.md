@@ -239,3 +239,17 @@ MacPilot 的 Developer ID + notarization 是 **macOS App Store 外**分发流程
 - 两层 `openssl cms -verify` 均返回 `CMS Verification successful`（CAfile 由系统钥匙串导出的 Apple Root CA + WWDR 组成）；已认证的内层 DER 中 `ProfileDistributionType=STORE`、Platform `iOS/xrOS/visionOS`。反向对照：翻转 profile 中间一字节后同一命令报 `CMS_SignerInfo_verify_ex: verification failure`。本次 automatic export 因本机 `No Accounts / No profiles` 失败，使用任务临时目录中的一次性手动参数导出（profile 未写入仓库）。
 - ASC Build ID：`2d6405ff-0af3-424d-bf66-67588bc7e37a`，`processingState=VALID`，`internalBuildState=IN_BETA_TESTING`，`autoNotifyEnabled=true`，`externalBuildState=READY_FOR_BETA_SUBMISSION`。内部组「内部」（`dbf86047-0ba9-4944-bc39-7c78e92b0cd8`，`isInternalGroup=true`、`hasAccessToAllBuilds=true`）自动接收该构建。中英文 What to Test 已写入并读回（zh-Hans 191 字符、en-US 382 字符）。
 - 仅分发给现有内部组；未提交 App Store Review、未发起外部 Beta Review、未新增测试员、未把构建 42 附加到 1.2.4 版本，也未执行 `asc metadata push`。`VALID` 与 `IN_BETA_TESTING` 都不代表 Apple 已审核批准。**真机 iPhone 上的后台挑战应答与自动解锁仍未实测**；本轮验证覆盖策略、协议、编译与签名门禁。
+
+## 2026-10-21：1.2.4 / 构建 42 提交 App Store Review
+
+用户指令「PilotNest 发版审核」授权本轮提交；本次直接使用已存在于 TestFlight 的构建 42，没有重新打包或上传 IPA。
+
+- **前置读回**：`asc versions list --app 6811335132 --platform IOS` → 1.2.4（`370852c7-a324-4a15-9223-132b1471911d`）`PREPARE_FOR_SUBMISSION`，train 可编辑；1.2.3 及更早均为 `READY_FOR_SALE`。最新构建 42（`2d6405ff-0af3-424d-bf66-67588bc7e37a`）`processingState=VALID`，上传于 2026-10-19T23:45:16-07:00。
+- **构建与代码一致**：`git diff --stat 989b642..HEAD -- iOS/ Packages/` 为空；构建 42 的发布提交 `989b642` 之后只有 Mac 侧改动，iOS 与共享协议包没有变化，因此没有为凑新构建号重新上传。构建 42 的 IPA SHA-256、签名、profile 与 entitlement 证据见上一节。
+- **截图**：1.2.4 的四个截图集均已存在（zh-Hans/en-US × `APP_IPHONE_67`/`APP_IPAD_PRO_3GEN_129`），每个集 3 张、`assetDeliveryState=COMPLETE`。未新增、删除或替换任何截图。解析 `asc screenshots list` 时先读原始输出的 `sets[].set` 与 `sets[].screenshots` 结构，避免再次把顶层 key 判断错。
+- **metadata**：新增 `iOS/MacPilotRemote/metadata/version/1.2.4/{zh-Hans,en-US}.json`，description/keywords/marketing/support 沿用 1.2.3，`whatsNew` 说明后台蓝牙广播、地址轮换后的后台识别、设备列表持续刷新，以及距离仍决定是否解锁；中英长度 234 / 640 字符。`asc metadata validate --dir iOS/MacPilotRemote/metadata` 为 **0 errors / 0 warnings**。
+- **推送与读回**：`asc metadata push ... --dry-run` 计划为 **2 adds（两个 locale 的 `whatsNew`）、0 updates、0 deletes**；正式推送返回 `succeeded=2/2`；再跑 dry-run 读回 `adds=0 updates=0 deletes=0`。
+- **审核备注**：`asc review details-update` 将 review detail `b8937aa8-3f5f-4da7-90ad-efe83d77717d` 从「Version 1.2.2 review steps」更新为 1.2.4，保留控制功能默认关闭与排序步骤，注明 1.2.4 没有新界面、BLE 靠近解锁不是主流程审核所必需；未设置 demo 账号。
+- **提交**：`asc review submit --app 6811335132 --version 1.2.4 --build 2d6405ff-... --dry-run` → `wouldAttach=true`、`wouldSubmit=true`；`--confirm` 返回 submission `6e4b1158-42ef-47f1-b526-955fc88c1c5f`、`submittedDate=2026-10-21T01:25:50.33Z`、`attached=true`。
+- **最终读回**：版本 1.2.4 `WAITING_FOR_REVIEW`；`asc builds links view --build-id 2d6405ff-... --type appStoreVersion` 返回版本 `370852c7-...`，证明挂载的就是构建 42；review submission `6e4b1158-...` 为 `WAITING_FOR_REVIEW`；`asc status` 的 `nextAction` 为 `Wait for App Store review outcome`。`WAITING_FOR_REVIEW` 只代表已排队，**不代表 Apple 已批准**。
+- **未做**：未重新打包或上传新 IPA；未改签名、provisioning 或 export 设置；未发起外部 Beta Review；未新增测试员；未改动线上 1.2.3。**真机 iPhone 上的后台挑战应答、地址轮换识别与自动解锁仍未实测**，本轮验证覆盖已有构建状态、元数据、截图与提交流程。
