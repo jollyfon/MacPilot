@@ -175,8 +175,12 @@ public enum LocalPortCloseService {
         }
     }
 
+    /// `forceKill` sends SIGKILL instead of SIGTERM.  Both paths verify the
+    /// process identity the same way first: a force kill removes any chance for
+    /// the process to exit on its own, so it must never land on a reused PID.
     public static func execute(
         _ plan: LocalPortClosePlan,
+        forceKill: Bool = false,
         environment: LocalPortCloseEnvironment = .live
     ) async throws -> LocalPortCloseResult {
         let freshSnapshot: LocalPortSnapshot
@@ -198,9 +202,13 @@ public enum LocalPortCloseService {
             currentPID: environment.currentPID()
         )
 
-        let signalStatus = environment.signal(plan.pid, Int32(SIGTERM))
+        let signalStatus = environment.signal(plan.pid, forceKill ? Int32(SIGKILL) : Int32(SIGTERM))
         guard signalStatus == 0 else {
-            throw LocalPortCloseError.signalFailed(pid: plan.pid, errno: signalStatus)
+            throw LocalPortCloseError.signalFailed(
+                pid: plan.pid,
+                errno: signalStatus,
+                forceKill: forceKill
+            )
         }
 
         var latest: [LocalPortListener] = []
@@ -217,7 +225,8 @@ public enum LocalPortCloseService {
         return LocalPortCloseResult(
             targetStoppedListening: !latest.contains(where: { $0.pid == plan.pid }),
             portFree: latest.isEmpty,
-            remainingPIDs: Array(Set(latest.map(\.pid))).sorted()
+            remainingPIDs: Array(Set(latest.map(\.pid))).sorted(),
+            forceKill: forceKill
         )
     }
 

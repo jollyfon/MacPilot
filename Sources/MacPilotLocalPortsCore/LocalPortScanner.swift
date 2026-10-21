@@ -111,6 +111,15 @@ public enum LocalPortScanner {
         let startTimeResult = processStartTimes(pids)
         if startTimeResult.failed { limitations.append(.startTimeUnavailable) }
 
+        // 一次 syscall 一个进程，读不到的（如其他用户）就不显示，不记为扫描限制：
+        // 否则系统进程会让页面永久挂着「部分进程信息不可用」。
+        var memoryByPID: [Int32: UInt64] = [:]
+        for pid in pids {
+            if let footprint = LocalPortMemoryReader.footprint(of: pid) {
+                memoryByPID[pid] = footprint
+            }
+        }
+
         var projects: [String: LocalPortProject] = [:]
         for cwd in Set(cwdByPID.values) {
             if let project = LocalPortProjectLocator.locate(cwd: cwd) {
@@ -131,7 +140,8 @@ public enum LocalPortScanner {
                 uptime: tableProcess?.uptime,
                 rawElapsedTime: tableProcess?.rawElapsedTime,
                 arguments: argumentResult.values[listener.pid],
-                startTime: startTimeResult.values[listener.pid]
+                startTime: startTimeResult.values[listener.pid],
+                memoryFootprintBytes: memoryByPID[listener.pid]
             )
             let parents = parentChain(for: process, in: processTable)
             let project = process.cwd.flatMap { projects[$0] }

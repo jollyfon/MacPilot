@@ -81,6 +81,8 @@ public struct LocalPortProcess: Sendable, Equatable {
     public let rawElapsedTime: String?
     public let arguments: String?
     public let startTime: String?
+    /// 物理内存占用（phys footprint）；读不到时为 nil。
+    public let memoryFootprintBytes: UInt64?
 
     public init(
         pid: Int32,
@@ -93,7 +95,8 @@ public struct LocalPortProcess: Sendable, Equatable {
         uptime: String? = nil,
         rawElapsedTime: String? = nil,
         arguments: String? = nil,
-        startTime: String? = nil
+        startTime: String? = nil,
+        memoryFootprintBytes: UInt64? = nil
     ) {
         self.pid = pid
         self.ppid = ppid
@@ -106,6 +109,7 @@ public struct LocalPortProcess: Sendable, Equatable {
         self.rawElapsedTime = rawElapsedTime
         self.arguments = arguments
         self.startTime = startTime
+        self.memoryFootprintBytes = memoryFootprintBytes
     }
 
     public var compactUptime: String? {
@@ -254,7 +258,7 @@ public enum LocalPortCloseError: Error, Sendable, Equatable {
     case processDisappeared(pid: Int32)
     case newPortOwner(port: Int, pid: Int32)
     case identityChanged(pid: Int32)
-    case signalFailed(pid: Int32, errno: Int32)
+    case signalFailed(pid: Int32, errno: Int32, forceKill: Bool)
     case verificationFailed
     case rescanFailed
 }
@@ -296,11 +300,18 @@ public struct LocalPortCloseResult: Sendable, Equatable {
     public let targetStoppedListening: Bool
     public let portFree: Bool
     public let remainingPIDs: [Int32]
+    public let forceKill: Bool
 
-    public init(targetStoppedListening: Bool, portFree: Bool, remainingPIDs: [Int32]) {
+    public init(
+        targetStoppedListening: Bool,
+        portFree: Bool,
+        remainingPIDs: [Int32],
+        forceKill: Bool = false
+    ) {
         self.targetStoppedListening = targetStoppedListening
         self.portFree = portFree
         self.remainingPIDs = remainingPIDs
+        self.forceKill = forceKill
     }
 }
 

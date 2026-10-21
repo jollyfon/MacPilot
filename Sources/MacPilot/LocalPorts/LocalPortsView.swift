@@ -346,6 +346,10 @@ private struct LocalPortRow: View {
                                     language: appModel.language
                                 ))
                             }
+                            if let footprint = group.representative.process.memoryFootprintBytes {
+                                Text("·")
+                                Text(MemoryByteFormatter.string(fromBytes: footprint))
+                            }
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -437,6 +441,11 @@ struct LocalPortDetailView: View {
                     detail(
                         appModel.t("localPortsUptime"),
                         LocalPortErrorFormatter.uptime(activity.process, language: appModel.language)
+                    )
+                    detail(
+                        appModel.t("localPortsMemory"),
+                        activity.process.memoryFootprintBytes
+                            .map(MemoryByteFormatter.string(fromBytes:)) ?? "—"
                     )
                     detail(appModel.t("localPortsStartTime"), activity.process.startTime ?? "—")
                     detail(appModel.t("localPortsArguments"), activity.process.arguments ?? "—")
@@ -560,19 +569,25 @@ struct LocalPortCloseView: View {
                 }
                 .keyboardShortcut(.cancelAction)
                 Spacer()
+                if model.isClosing {
+                    Label(appModel.t("localPortsClosing"), systemImage: "hourglass")
+                        .foregroundStyle(.secondary)
+                }
+                Button(appModel.t("localPortsForceKill"), role: .destructive) {
+                    model.confirmClose(forceKill: true)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(model.isClosing)
                 Button(appModel.t("localPortsCloseConfirm"), role: .destructive) {
                     model.confirmClose()
                 }
                 .macPilotProminentButtonStyle()
                 .disabled(model.isClosing)
-                if model.isClosing {
-                    Label(appModel.t("localPortsClosing"), systemImage: "hourglass")
-                        .foregroundStyle(.secondary)
-                }
             }
         }
         .padding(24)
-        .frame(minWidth: 430)
+        .frame(minWidth: 500)
     }
 }
 
@@ -606,7 +621,13 @@ enum LocalPortErrorFormatter {
         case let .processDisappeared(pid): return AppText.value("localPortsProcessDisappeared", language: language, pid)
         case let .newPortOwner(port, pid): return AppText.value("localPortsNewPortOwner", language: language, port, pid)
         case let .identityChanged(pid): return AppText.value("localPortsIdentityChanged", language: language, pid)
-        case let .signalFailed(pid, errno): return AppText.value("localPortsSignalFailed", language: language, pid, errno)
+        case let .signalFailed(pid, errno, forceKill):
+            return AppText.value(
+                forceKill ? "localPortsForceKillSignalFailed" : "localPortsSignalFailed",
+                language: language,
+                pid,
+                errno
+            )
         case .verificationFailed: return AppText.value("localPortsVerificationFailed", language: language)
         case .rescanFailed: return AppText.value("localPortsRescanFailed", language: language)
         }
@@ -705,6 +726,9 @@ enum LocalPortErrorFormatter {
         if result.targetStoppedListening {
             return AppText.value("localPortsProcessStoppedPortTaken", language: language)
         }
-        return AppText.value("localPortsStillListening", language: language)
+        return AppText.value(
+            result.forceKill ? "localPortsStillListeningAfterKill" : "localPortsStillListening",
+            language: language
+        )
     }
 }

@@ -152,7 +152,7 @@ final class LocalPortsModel: ObservableObject, ManagedFeature {
         pendingClosePlan = nil
     }
 
-    func confirmClose() {
+    func confirmClose(forceKill: Bool = false) {
         guard let plan = pendingClosePlan, !isClosing, isVisible else { return }
         isClosing = true
         lastCloseError = nil
@@ -160,7 +160,11 @@ final class LocalPortsModel: ObservableObject, ManagedFeature {
         let environment = closeEnvironment
 
         let worker = Task.detached(priority: .utility) {
-            try await LocalPortCloseService.execute(plan, environment: environment)
+            try await LocalPortCloseService.execute(
+                plan,
+                forceKill: forceKill,
+                environment: environment
+            )
         }
         closeWorker = worker
 

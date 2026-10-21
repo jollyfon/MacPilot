@@ -15,15 +15,35 @@ enum LocalPortsMenuPresentation {
         let ownerLabel: String
         let category: LocalPortOwnerCategory
         let isLAN: Bool
+        let memoryFootprintBytes: UInt64?
+
+        init(
+            pid: Int32,
+            ports: [Int],
+            ownerLabel: String,
+            category: LocalPortOwnerCategory,
+            isLAN: Bool,
+            memoryFootprintBytes: UInt64? = nil
+        ) {
+            self.pid = pid
+            self.ports = ports
+            self.ownerLabel = ownerLabel
+            self.category = category
+            self.isLAN = isLAN
+            self.memoryFootprintBytes = memoryFootprintBytes
+        }
 
         var id: Int32 { pid }
         var isProject: Bool { category == .project }
 
         var portList: String { ports.map(String.init).joined(separator: ", ") }
 
-        func title(lanLabel: String) -> String {
+        /// The stored menu row is presentation-only, so the byte count is
+        /// formatted by the caller and passed in already localised.
+        func title(lanLabel: String, memoryLabel: String? = nil) -> String {
+            let memory = memoryLabel.map { " · \($0)" } ?? ""
             let lan = isLAN ? " · \(lanLabel)" : ""
-            return "\(portList) — \(ownerLabel) · PID \(pid)\(lan)"
+            return "\(portList) — \(ownerLabel) · PID \(pid)\(memory)\(lan)"
         }
     }
 
@@ -36,7 +56,8 @@ enum LocalPortsMenuPresentation {
                     ports: Array(Set(activities.map(\.listener.port))).sorted(),
                     ownerLabel: owner.label,
                     category: owner.category,
-                    isLAN: activities.contains { $0.scope == .lan }
+                    isLAN: activities.contains { $0.scope == .lan },
+                    memoryFootprintBytes: activities.compactMap(\.process.memoryFootprintBytes).max()
                 )
             }
             .sorted {
@@ -117,12 +138,12 @@ struct LocalPortsMenuSection: View {
             } else {
                 if !projects.isEmpty {
                     Section(model.t("localPortsProjects")) {
-                        ForEach(projects) { Text($0.title(lanLabel: model.t("localPortsLANScope"))) }
+                        ForEach(projects) { Text(title(for: $0)) }
                     }
                 }
                 if !services.isEmpty {
                     Section(model.t("localPortsServices")) {
-                        ForEach(services) { Text($0.title(lanLabel: model.t("localPortsLANScope"))) }
+                        ForEach(services) { Text(title(for: $0)) }
                     }
                 }
                 let hidden = rows.count - shown.count
@@ -133,6 +154,13 @@ struct LocalPortsMenuSection: View {
             Divider()
             Button(model.t("localPortsOpen")) { openPorts() }
         }
+    }
+
+    private func title(for row: LocalPortsMenuPresentation.Row) -> String {
+        row.title(
+            lanLabel: model.t("localPortsLANScope"),
+            memoryLabel: row.memoryFootprintBytes.map(MemoryByteFormatter.string(fromBytes:))
+        )
     }
 
     /// The three empty states are not interchangeable; see

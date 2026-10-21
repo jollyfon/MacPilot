@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import MacPilotLocalPortsCore
 import Testing
@@ -147,6 +148,44 @@ struct LocalPortsModelTests {
         model.shutdown()
     }
 
+    @Test func forceKillConfirmationSendsSigkill() async throws {
+        let activity = fixtureActivity()
+        let sequence = ScanSequence(values: [
+            LocalPortSnapshot(activities: [activity]),
+            LocalPortSnapshot(activities: [activity]),
+            LocalPortSnapshot(activities: [activity]),
+            .empty,
+        ])
+        let signals = SignalRecorder()
+        let environment = LocalPortCloseEnvironment(
+            scan: { sequence.next() },
+            listenerScan: { [] },
+            startTime: { _ in "start" },
+            signal: { _, signal in signals.record(signal); return 0 },
+            sleep: { _ in },
+            currentUID: { 501 },
+            currentPID: { 999 }
+        )
+        let model = LocalPortsModel(environment: environment)
+
+        model.startVisibleSession()
+        try await waitForRefresh(toFinish: model)
+        model.prepareClose(for: activity)
+        for _ in 0..<100 where model.pendingClosePlan == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(model.pendingClosePlan != nil)
+
+        model.confirmClose(forceKill: true)
+        for _ in 0..<100 where model.isClosing {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(signals.values == [Int32(SIGKILL)])
+        #expect(model.lastCloseResult?.forceKill == true)
+        #expect(model.lastCloseResult?.portFree == true)
+        model.shutdown()
+    }
+
     private func makeEnvironment(
         snapshot: LocalPortSnapshot,
         delay: Duration = .milliseconds(1)
@@ -234,6 +273,17 @@ struct LocalPortsModelTests {
             active -= 1
             lock.unlock()
             return snapshot
+        }
+    }
+
+    private final class SignalRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var values: [Int32] = []
+
+        func record(_ signal: Int32) {
+            lock.lock()
+            values.append(signal)
+            lock.unlock()
         }
     }
 

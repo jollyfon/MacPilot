@@ -1,8 +1,17 @@
+import Darwin
 import Foundation
 import Testing
 @testable import MacPilotLocalPortsCore
 
 struct LocalPortScannerTests {
+    @Test func memoryReaderReadsOwnFootprintAndSkipsMissingProcesses() {
+        let own = LocalPortMemoryReader.footprint(of: getpid())
+        #expect((own ?? 0) > 0)
+
+        // macOS 的 PID 上限远低于这个值，这个查询必然失败而不是读到别的进程。
+        #expect(LocalPortMemoryReader.footprint(of: 999_999) == nil)
+    }
+
     @Test func listenerParserMergesIPv4AndIPv6AndDeduplicatesEntries() {
         let output = """
         p42

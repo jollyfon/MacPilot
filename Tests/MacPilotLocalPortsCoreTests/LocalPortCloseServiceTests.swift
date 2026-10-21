@@ -176,6 +176,78 @@ struct LocalPortCloseServiceTests {
         #expect(recorder.value == Int32(SIGTERM))
         #expect(result.targetStoppedListening)
         #expect(result.portFree)
+        #expect(!result.forceKill)
+    }
+
+    @Test func executeWithForceKillSendsSigkill() async throws {
+        let uid = Int32(getuid())
+        let activity = makeActivity(pid: 42, uid: uid)
+        let plan = LocalPortClosePlan(
+            port: 3000,
+            pid: 42,
+            uid: uid,
+            executablePath: activity.process.executablePath,
+            processStartTime: "start",
+            activity: activity,
+            otherPorts: [],
+            peerPIDs: []
+        )
+        let recorder = SignalRecorder()
+        let environment = LocalPortCloseEnvironment(
+            scan: { LocalPortSnapshot(activities: [activity]) },
+            listenerScan: { [] },
+            startTime: { _ in "start" },
+            signal: { _, signal in recorder.record(signal); return 0 },
+            sleep: { _ in },
+            currentUID: { uid },
+            currentPID: { 99 }
+        )
+
+        let result = try await LocalPortCloseService.execute(
+            plan,
+            forceKill: true,
+            environment: environment
+        )
+        #expect(recorder.value == Int32(SIGKILL))
+        #expect(result.targetStoppedListening)
+        #expect(result.portFree)
+        #expect(result.forceKill)
+    }
+
+    @Test func aFailedForceKillSaysWhichSignalWasRefused() async {
+        let uid = Int32(getuid())
+        let activity = makeActivity(pid: 42, uid: uid)
+        let plan = LocalPortClosePlan(
+            port: 3000,
+            pid: 42,
+            uid: uid,
+            executablePath: activity.process.executablePath,
+            processStartTime: "start",
+            activity: activity,
+            otherPorts: [],
+            peerPIDs: []
+        )
+        let environment = LocalPortCloseEnvironment(
+            scan: { LocalPortSnapshot(activities: [activity]) },
+            listenerScan: { [] },
+            startTime: { _ in "start" },
+            signal: { _, _ in EPERM },
+            sleep: { _ in },
+            currentUID: { uid },
+            currentPID: { 99 }
+        )
+
+        await #expect(throws: LocalPortCloseError.signalFailed(
+            pid: 42,
+            errno: EPERM,
+            forceKill: true
+        )) {
+            try await LocalPortCloseService.execute(
+                plan,
+                forceKill: true,
+                environment: environment
+            )
+        }
     }
 
     @Test func executeRefusesMissingStartTimeBeforeSendingSignal() async {

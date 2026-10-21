@@ -77,6 +77,30 @@ struct LocalPortsMenuTests {
         #expect(exposed.title(lanLabel: "局域网") == "8080 — api · PID 4242 · 局域网")
     }
 
+    @Test func aRowShowsMemoryBetweenThePIDAndTheLANMarker() {
+        let row = LocalPortsMenuPresentation.Row(
+            pid: 4242,
+            ports: [8080],
+            ownerLabel: "api",
+            category: .service,
+            isLAN: true
+        )
+        #expect(row.title(lanLabel: "局域网", memoryLabel: "382 MB")
+            == "8080 — api · PID 4242 · 382 MB · 局域网")
+        #expect(row.title(lanLabel: "LAN", memoryLabel: nil) == "8080 — api · PID 4242 · LAN")
+    }
+
+    @Test func rowsCarryTheProcessMemoryAndOmitItWhenUnreadable() {
+        let snapshot = LocalPortSnapshot(activities: [
+            activity(pid: 42, port: 3000, label: "OctoPilot", category: .project, memory: 123_456_789),
+            activity(pid: 43, port: 4000, label: "daemon", category: .systemService),
+        ])
+        let rows = LocalPortsMenuPresentation.rows(from: snapshot)
+
+        #expect(rows.first { $0.pid == 42 }?.memoryFootprintBytes == 123_456_789)
+        #expect(rows.first { $0.pid == 43 }?.memoryFootprintBytes == nil)
+    }
+
     @Test func anEmptySnapshotHasNothingToHide() {
         #expect(LocalPortsMenuPresentation.rows(from: .empty).isEmpty)
         #expect(LocalPortsMenuPresentation.hiddenRowCount(from: .empty) == 0)
@@ -107,7 +131,8 @@ struct LocalPortsMenuTests {
         port: Int,
         label: String,
         category: LocalPortOwnerCategory,
-        scope: LocalPortScope = .local
+        scope: LocalPortScope = .local,
+        memory: UInt64? = nil
     ) -> LocalPortActivity {
         LocalPortActivity(
             listener: LocalPortListener(
@@ -125,7 +150,8 @@ struct LocalPortsMenuTests {
                 executablePath: "/usr/local/bin/node",
                 uid: 501,
                 user: "me",
-                cwd: "/tmp/project"
+                cwd: "/tmp/project",
+                memoryFootprintBytes: memory
             ),
             parentChain: [],
             project: nil,
