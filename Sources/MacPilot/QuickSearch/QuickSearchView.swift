@@ -66,15 +66,16 @@ struct QuickSearchPanelContent: View {
         }
     }
 
-    /// 面板本体只有一层材质，与剪贴板面板保持一致。
-    /// 不用窗口级液态玻璃：玻璃背板会让窗口在圆角之外再描一圈直角边，
-    /// 正是输入框下方那条多余的框线。也不额外叠描边——圆角就是面板的边界。
+    /// 面板本体用一层不透明的自适应底色，不铺半透明材质。
+    /// 材质会把窗口背后的内容透上来：深色模式下压在白色网页上时，面板会被
+    /// 冲成中灰、白字几乎读不出来，浅色模式下也会跟着背景一起变亮。
+    /// 底色跟随系统外观（浅色近白、深色近黑），正文对比度不再取决于背后是什么。
     private var panelSurface: some View {
         RoundedRectangle(
             cornerRadius: QuickSearchPanelLayout.cornerRadius,
             style: .continuous
         )
-        .fill(.ultraThinMaterial)
+        .fill(Color(nsColor: .windowBackgroundColor))
     }
 
     /// 区块之间只用一根发丝线分隔，不再给每段铺一层背景。

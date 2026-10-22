@@ -127,7 +127,9 @@ enum QuickSearchFavorites {
         }
     }
 
-    /// 空查询那一屏：收藏在前，最近使用在后，同一条只出现一次。
+    /// 空查询那一屏：收藏在前，最近使用在后，同一条只出现一次；
+    /// 还有空位就按索引里的名称顺序补齐——没搜过的应用也要能直接启动，
+    /// 而不是只让用户看见最近用过的几个。
     static func rows(
         favorites: [QuickSearchFavorite],
         entries: [QuickSearchApplicationEntry],
@@ -157,6 +159,14 @@ enum QuickSearchFavorites {
             )
             guard seen.insert(identity).inserted else { continue }
             picked.append(result)
+        }
+        for entry in entries {
+            guard picked.count < max(0, totalLimit) else { break }
+            // Finder 都不显示的备份包（`.NAME.app`）不该占空查询的名额；
+            // 它们仍然可以靠输入名称搜到。
+            guard !entry.url.lastPathComponent.hasPrefix(".") else { continue }
+            guard seen.insert(entry.usageIdentity).inserted else { continue }
+            picked.append(QuickSearchResult(application: entry))
         }
         return picked
     }

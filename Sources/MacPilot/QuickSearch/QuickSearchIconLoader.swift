@@ -87,6 +87,14 @@ final class QuickSearchIconLoader: ObservableObject {
         tracker.clear()
     }
 
+    /// 面板每次呼出前重试上次没取到、或还卡在路上的图标。图标服务在登录初期
+    /// 和高负载时会短暂失败；失败被永久记住的话，这一行会一直停在占位符，
+    /// 直到功能重启。已缓存的图不受影响，正常完成的请求也不会被重来。
+    func retryUnresolvedIcons() {
+        guard !failedKeys.isEmpty || !inFlight.isEmpty else { return }
+        cancelPendingLoads()
+    }
+
     // MARK: - 加载
 
     private func request(key: String, url: URL, pointSize: CGFloat) {

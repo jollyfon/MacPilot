@@ -1479,10 +1479,10 @@ struct QuickSearchActionTests {
         harness.model.openPanel()
         #expect(harness.model.applicationResults.isEmpty)
 
-        // 空查询上索引落地：给出最近使用，而不是继续空着。
+        // 空查询上索引落地：先给出最近使用，其余按名称补齐，而不是继续空着。
         await settleIndex(harness.inventory)
         #expect(harness.model.query.isEmpty)
-        #expect(harness.model.applicationResults.map(\.title) == ["Safari"])
+        #expect(harness.model.applicationResults.map(\.title) == ["Safari", "计算器"])
         harness.model.shutdown()
     }
 
@@ -2827,6 +2827,30 @@ struct QuickSearchFavoritesModelTests {
         #expect(!harness.model.isFavorite(harness.model.results[1]))
     }
 
+    @Test func emptyQueryShowsFavoritesRecentsAndThenTheRestOfTheIndexUpToFifty() async {
+        let apps = (0..<60).map { index in
+            QuickSearchApplicationEntry(
+                url: URL(fileURLWithPath: "/Applications/App\(index).app"),
+                name: String(format: "App%02d", index),
+                bundleIdentifier: "com.test.app\(index)"
+            )
+        }
+        let harness = Harness()
+        await harness.enable(entries: apps)
+        defer { harness.model.shutdown() }
+        harness.model.usage.recordLaunch(of: apps[59])
+        harness.model.toggleFavorite(QuickSearchResult(application: apps[58]))
+
+        harness.model.openPanel()
+
+        let titles = harness.model.results.map(\.title)
+        #expect(titles.count == QuickSearchLimits.emptyQueryApplications)
+        // 收藏 → 最近使用 → 其余按索引名称顺序，且同一条不重复。
+        #expect(Array(titles.prefix(3)) == ["App58", "App59", "App00"])
+        #expect(titles.filter { $0 == "App58" }.count == 1)
+        #expect(titles.last == "App47")
+    }
+
     @Test func togglingFavoriteRedrawsTheEmptyQueryScreenThatIsAlreadyOpen() async {
         let harness = Harness()
         await harness.enable(entries: sampleApps)
@@ -2835,11 +2859,12 @@ struct QuickSearchFavoritesModelTests {
         let target = QuickSearchResult(application: sampleApps[0])
 
         harness.model.toggleFavorite(target)
-        #expect(harness.model.results.map(\.title) == ["Safari"])
+        // 收藏钉在最前，其余索引里的应用按名称补齐空查询那一屏。
+        #expect(harness.model.results.map(\.title) == ["Safari", "计算器"])
         #expect(harness.model.settings.favorites.count == 1)
 
         harness.model.toggleFavorite(target)
-        #expect(harness.model.results.isEmpty)
+        #expect(harness.model.results.map(\.title) == ["计算器", "Safari"])
         #expect(harness.model.settings.favorites.isEmpty)
     }
 
@@ -2876,7 +2901,8 @@ struct QuickSearchFavoritesModelTests {
         )
         harness.model.openPanel()
 
-        #expect(harness.model.results.map(\.title) == ["Safari"])
+        // 钉住的 Safari 排第一，其余索引里的应用按名称补齐。
+        #expect(harness.model.results.map(\.title) == ["Safari", "计算器"])
     }
 
     @Test func openingAFileCountsAsOneUseAndSortsAheadNextTime() async {
@@ -3123,7 +3149,7 @@ struct QuickSearchMatchScopeModelTests {
         harness.model.openPanel()
         harness.model.setMatchScope(.nameOnly)
 
-        // 空查询那一屏是收藏与最近使用，跟匹配范围无关，不该被改成空白。
-        #expect(harness.model.results.map(\.title) == ["Safari"])
+        // 空查询那一屏是收藏、最近使用与索引补齐，跟匹配范围无关，不该被改成空白。
+        #expect(harness.model.results.map(\.title) == ["Safari", "计算器"])
     }
 }

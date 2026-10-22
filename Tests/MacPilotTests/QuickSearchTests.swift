@@ -9,6 +9,7 @@
 //  都走注入的假实现，所以不会读到用户的应用和文件。
 //
 
+import AppKit
 import Foundation
 import Testing
 
@@ -219,6 +220,25 @@ struct QuickSearchMatchingTests {
         let entries = makeEntries(["Safari", "Notes"])
 
         #expect(ApplicationSearchProvider.search(query: "  ", entries: entries, includeTags: false, limit: 20).isEmpty)
+    }
+
+    @Test func emptyQueryScreenFillsWithTheIndexAlphabeticallyUpToItsLimit() {
+        let hidden = makeEntry(".Backup", at: "/Applications/.Backup.app")
+        let entries = [hidden] + (0..<60).map {
+            makeEntry(String(format: "App%02d", $0), at: "/Applications/A\($0).app")
+        }
+
+        let rows = QuickSearchFavorites.rows(
+            favorites: [],
+            entries: entries,
+            recent: [],
+            favoriteLimit: QuickSearchLimits.favoritesOnEmptyQuery,
+            totalLimit: QuickSearchLimits.emptyQueryApplications
+        )
+
+        #expect(rows.count == 50)
+        #expect(rows.map(\.title) == (0..<50).map { String(format: "App%02d", $0) })
+        #expect(!rows.contains { $0.title == ".Backup" })
     }
 
     @Test func capsTheReturnedRows() {
@@ -509,5 +529,66 @@ private extension SpotlightScopeResolution {
         case .usable(let scopes): return scopes
         case .unusable: return []
         }
+    }
+}
+
+// MARK: - 图标重试
+
+/// 图标服务会短暂失败：一次失败不该让那一行在整个进程生命周期里停在占位符。
+@MainActor
+struct QuickSearchIconLoaderTests {
+    private final class LoadAttempts: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+
+        func next() -> Int {
+            lock.withLock {
+                value += 1
+                return value
+            }
+        }
+    }
+
+    @Test func aFailedIconIsRetriedOnceThePanelReopens() async throws {
+        let attempts = LoadAttempts()
+        let png = try #require(Self.solidPNG())
+        let loader = QuickSearchIconLoader(imageLoader: { _, _ in
+            attempts.next() == 1 ? nil : png
+        })
+        defer { loader.stop() }
+        let url = URL(fileURLWithPath: "/tmp/quick-search-retry-\(UUID().uuidString).png")
+
+        // 第一次取图失败：这一行先落到占位符。
+        #expect(loader.icon(for: url, pointSize: 24) == nil)
+        await Self.waitUntil { loader.pendingRequestCount == 0 }
+        // 失败被记住之后，同一次会话里不再重复请求。
+        #expect(loader.icon(for: url, pointSize: 24) == nil)
+        #expect(loader.pendingRequestCount == 0)
+
+        // 再次呼出面板：失败记录被清掉，同一行重新取图并显示图标。
+        loader.retryUnresolvedIcons()
+        #expect(loader.icon(for: url, pointSize: 24) == nil)
+        await Self.waitUntil { loader.icon(for: url, pointSize: 24) != nil }
+        #expect(loader.icon(for: url, pointSize: 24) != nil)
+    }
+
+    /// 轮询到条件成立为止。这是等待异步状态落地，不是测墙钟预算，所以上限给得宽。
+    private static func waitUntil(_ condition: @MainActor () -> Bool) async {
+        for _ in 0..<1_000 {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private static func solidPNG() -> Data? {
+        let side: CGFloat = 24
+        let image = NSImage(size: NSSize(width: side, height: side))
+        image.lockFocus()
+        NSColor.systemBlue.setFill()
+        NSRect(x: 0, y: 0, width: side, height: side).fill()
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
     }
 }

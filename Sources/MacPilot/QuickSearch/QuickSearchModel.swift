@@ -197,10 +197,14 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         favoriteIdentities.contains(result.favoriteIdentity)
     }
 
-    /// 面板显示的行：应用在前、文件在后，合计不超过展示上界。
+    /// 面板显示的行：应用在前、文件在后。空查询那一屏最多 50 个应用，
+    /// 输入关键字之后仍按原上界截断。
     /// 计算属性每次求值顺序一致，选中下标始终指向同一行。
     var results: [QuickSearchResult] {
-        Array((applicationResults + fileResults).prefix(QuickSearchLimits.visibleResults))
+        let limit = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? QuickSearchLimits.emptyQueryApplications
+            : QuickSearchLimits.visibleResults
+        return Array((applicationResults + fileResults).prefix(limit))
     }
 
     var lifecycleState: LifecycleState {
@@ -466,6 +470,9 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
         query = ""
         selectedRowIndex = 0
         fileSearchIssue = nil
+        // 上一次没取到的图标在这里重新排队：图标服务短暂失败不该让占位符
+        // 赖到整个进程结束。已缓存的图标继续命中，不会重取。
+        icons.retryUnresolvedIcons()
         showFavoritesAndRecents()
         inventory.syncRunningState()
         inventory.refreshIfStale()
@@ -541,8 +548,8 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
     private func showFavoritesAndRecents() {
         let recents = ApplicationSearchProvider.recentApplications(
             entries: inventory.entries,
-            recentIdentities: usage.recentIdentities(limit: QuickSearchLimits.recentApplications),
-            limit: QuickSearchLimits.recentApplications
+            recentIdentities: usage.recentIdentities(limit: QuickSearchLimits.emptyQueryApplications),
+            limit: QuickSearchLimits.emptyQueryApplications
         )
         applicationResults = QuickSearchFavorites.rows(
             favorites: QuickSearchFavorites.ordered(settings.favorites) {
@@ -551,7 +558,7 @@ final class QuickSearchModel: ObservableObject, ManagedFeature, FeatureResourceR
             entries: inventory.entries,
             recent: recents,
             favoriteLimit: QuickSearchLimits.favoritesOnEmptyQuery,
-            totalLimit: QuickSearchLimits.applicationResults
+            totalLimit: QuickSearchLimits.emptyQueryApplications
         )
         fileResults = []
     }

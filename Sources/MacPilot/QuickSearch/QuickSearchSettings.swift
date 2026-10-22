@@ -31,16 +31,17 @@ enum QuickSearchFileScope: String, Codable, Equatable, CaseIterable, Identifiabl
 enum QuickSearchLimits {
     /// 面板里最多展示的结果行数。
     static let visibleResults = 40
+    /// 空查询时最多展示的应用个数（收藏 + 最近使用 + 索引补齐）。
+    static let emptyQueryApplications = 50
     /// 应用结果最多占用的行数，给文件结果留出空间。
     static let applicationResults = 20
     /// Spotlight 单次查询最多取回的条目数（内存上界，与展示量分开）。
     static let spotlightResults = 120
-    /// 空查询时展示的最近应用条数。
-    static let recentApplications = 8
     /// 收藏总条数上限。
     static let favorites = 24
-    /// 空查询那一屏里收藏最多占的行数，剩下的留给最近使用。
-    static let favoritesOnEmptyQuery = 12
+    /// 空查询那一屏里收藏最多占的行数。收藏总量本来就低于空查询上界，
+    /// 钉住的就该全部出现，剩下的名额留给最近使用和索引补齐。
+    static let favoritesOnEmptyQuery = favorites
     /// 自定义搜索目录数量上限。
     static let customDirectories = 12
     /// 输入防抖：连续打字时只在停手后发起一次 Spotlight 查询。
