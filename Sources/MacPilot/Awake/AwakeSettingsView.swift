@@ -415,6 +415,9 @@ struct AwakeSettingsView: View {
 struct AwakeSessionProtectionDraft {
     /// 第二步的选项每次都从固定默认值开始，不记住上次的选择。
     var endOnForcedSleep = false
+    var allowSystemSleepWhenDisplayOff = false
+    var blockScreenSaver = false
+    var screenSaverIdleMinutes = 45
     var safetyPolicy = AwakeSafetyPolicy.standard
     var warnBeforeBatteryTermination = false
     var ignoreBatteryLevelOnExternalPower = true
@@ -428,6 +431,9 @@ struct AwakeSessionProtectionDraft {
 
     init(configuration: AwakeSessionProfileConfiguration) {
         endOnForcedSleep = configuration.endOnForcedSleep
+        allowSystemSleepWhenDisplayOff = configuration.allowSystemSleepWhenDisplayOff
+        blockScreenSaver = configuration.blockScreenSaver
+        screenSaverIdleMinutes = configuration.screenSaverIdleMinutes
         safetyPolicy.lowBatteryProtectionEnabled = configuration.lowBatteryProtectionEnabled
         safetyPolicy.minimumBatteryLevel = configuration.minimumBatteryLevel
         warnBeforeBatteryTermination = configuration.warnBeforeBatteryTermination
@@ -440,6 +446,9 @@ struct AwakeSessionProtectionDraft {
     func applying(to configuration: AwakeSessionProfileConfiguration) -> AwakeSessionProfileConfiguration {
         var result = configuration
         result.endOnForcedSleep = endOnForcedSleep
+        result.allowSystemSleepWhenDisplayOff = allowSystemSleepWhenDisplayOff
+        result.blockScreenSaver = blockScreenSaver
+        result.screenSaverIdleMinutes = screenSaverIdleMinutes
         result.lowBatteryProtectionEnabled = safetyPolicy.lowBatteryProtectionEnabled
         result.minimumBatteryLevel = safetyPolicy.minimumBatteryLevel
         result.warnBeforeBatteryTermination = warnBeforeBatteryTermination
@@ -501,7 +510,7 @@ private struct AwakeSessionProtectionSheet: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 16)
         }
-        .frame(minWidth: 520, idealWidth: 560, minHeight: 580, idealHeight: 660)
+        .frame(minWidth: 520, idealWidth: 560, minHeight: 360, idealHeight: 460)
         .sheet(isPresented: $isSaveProfileSheetPresented) {
             // 保存方案在第二步：把弹窗里确认前的完整配置（含本页保护选项）
             // 存为方案，保存后这一步也一并收起。
@@ -528,6 +537,9 @@ private struct AwakeSessionProtectionSheet: View {
 
         awake.updateSettings { settings in
             settings.defaultPolicy.endOnForcedSleep = selected.endOnForcedSleep
+            settings.defaultPolicy.allowSystemSleepWhenDisplayOff = selected.allowSystemSleepWhenDisplayOff
+            settings.defaultPolicy.blockScreenSaver = selected.blockScreenSaver
+            settings.defaultPolicy.screenSaverIdleMinutes = selected.screenSaverIdleMinutes
             settings.safetyPolicy = selected.safetyPolicy
             settings.defaultSession.warnBeforeBatteryTermination = selected.warnBeforeBatteryTermination
             settings.defaultSession.ignoreBatteryLevelOnExternalPower = selected.ignoreBatteryLevelOnExternalPower
@@ -722,8 +734,6 @@ private struct AwakeSessionOptionsView: View {
         Text(model.t("awakeDisplaySleepHint"))
             .font(.caption)
             .foregroundStyle(.secondary)
-        Toggle(model.t("awakeAllowSystemSleepWhenDisplayOff"), isOn: $configuration.allowSystemSleepWhenDisplayOff)
-            .toggleStyle(.switch)
 
         Toggle(model.t("awakeClosedLidSleep"), isOn: $configuration.preventClosedLidSleep)
             .toggleStyle(.switch)
@@ -735,26 +745,6 @@ private struct AwakeSessionOptionsView: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
         }
-
-        sectionLabel(model.t("awakeScreenSaver"))
-        Toggle(model.t("awakeBlockScreenSaver"), isOn: $configuration.blockScreenSaver)
-            .toggleStyle(.switch)
-        if configuration.blockScreenSaver {
-            SettingsSlider(
-                value: screenSaverIdleBinding,
-                in: 5...180,
-                step: 5,
-                label: model.t("awakeScreenSaverAllowsAfter", configuration.screenSaverIdleMinutes),
-                format: { model.t("awakeScreenSaverAllowsAfter", Int($0.rounded())) }
-            )
-            Text(model.t("awakeScreenSaverAllowsAfter", configuration.screenSaverIdleMinutes))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(model.t("awakeScreenSaverAccessibilityHint"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-
     }
 
     private var durationPreset: AwakeDefaultDurationPreset {
@@ -804,13 +794,6 @@ private struct AwakeSessionOptionsView: View {
         )
     }
 
-    private var screenSaverIdleBinding: Binding<Double> {
-        Binding(
-            get: { Double(configuration.screenSaverIdleMinutes) },
-            set: { configuration.screenSaverIdleMinutes = Int($0.rounded()) }
-        )
-    }
-
     private func sectionLabel(_ title: String) -> some View {
         Text(title).font(.subheadline).fontWeight(.semibold).padding(.top, 2)
     }
@@ -819,15 +802,73 @@ private struct AwakeSessionOptionsView: View {
 private struct AwakeSessionProtectionOptionsView: View {
     @EnvironmentObject private var model: MacPilotModel
     @Binding var draft: AwakeSessionProtectionDraft
+    @State private var showsAdvancedSettings = false
 
     var body: some View {
-        forceSleepSection
-        Divider()
-        batteryProtectionSection
-        Divider()
-        powerAdapterSection
-        Divider()
         autoStartSection
+        Divider()
+        advancedSettingsDisclosure
+        if showsAdvancedSettings {
+            Divider()
+            displayAndScreenSaverSection
+            Divider()
+            forceSleepSection
+            Divider()
+            batteryProtectionSection
+            Divider()
+            powerAdapterSection
+        }
+    }
+
+    /// 第二步只常驻自动开启；其余保护选项收进默认折叠的高级设置。
+    private var advancedSettingsDisclosure: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.18)) { showsAdvancedSettings.toggle() }
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 10) {
+                    Image(systemName: "chevron.forward")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+                        .rotationEffect(.degrees(showsAdvancedSettings ? 90 : 0))
+                    Text(model.t("awakeAdvancedSettings"))
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    Spacer()
+                }
+                Text(model.t("awakeAdvancedSettingsHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 24)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var displayAndScreenSaverSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel(model.t("awakeDisplaySection"))
+            Toggle(model.t("awakeAllowSystemSleepWhenDisplayOff"), isOn: allowSystemSleepWhenDisplayOffBinding)
+                .toggleStyle(.switch)
+
+            sectionLabel(model.t("awakeScreenSaver"))
+            Toggle(model.t("awakeBlockScreenSaver"), isOn: blockScreenSaverBinding)
+                .toggleStyle(.switch)
+            if draft.blockScreenSaver {
+                SettingsSlider(
+                    value: screenSaverIdleBinding,
+                    in: 5...180,
+                    step: 5,
+                    label: model.t("awakeScreenSaverAllowsAfter", draft.screenSaverIdleMinutes),
+                    format: { model.t("awakeScreenSaverAllowsAfter", Int($0.rounded())) }
+                )
+                Text(model.t("awakeScreenSaverAccessibilityHint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     /// 创建会话和编辑方案共用的保护选项。
@@ -906,6 +947,27 @@ private struct AwakeSessionProtectionOptionsView: View {
         Binding(
             get: { draft.endOnForcedSleep },
             set: { draft.endOnForcedSleep = $0 }
+        )
+    }
+
+    private var allowSystemSleepWhenDisplayOffBinding: Binding<Bool> {
+        Binding(
+            get: { draft.allowSystemSleepWhenDisplayOff },
+            set: { draft.allowSystemSleepWhenDisplayOff = $0 }
+        )
+    }
+
+    private var blockScreenSaverBinding: Binding<Bool> {
+        Binding(
+            get: { draft.blockScreenSaver },
+            set: { draft.blockScreenSaver = $0 }
+        )
+    }
+
+    private var screenSaverIdleBinding: Binding<Double> {
+        Binding(
+            get: { Double(draft.screenSaverIdleMinutes) },
+            set: { draft.screenSaverIdleMinutes = Int($0.rounded()) }
         )
     }
 

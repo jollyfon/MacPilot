@@ -319,6 +319,8 @@ struct AwakeTests {
         #expect(AppText.value("awakeSessionProtectionTitle", language: .english) == "Step 2: Session Protection")
         #expect(AppText.value("awakeSessionProtectionConfirm", language: .simplifiedChinese) == "确认并开始 Session")
         #expect(AppText.value("awakeSessionProtectionConfirm", language: .english) == "Confirm and Start Session")
+        #expect(AppText.value("awakeAdvancedSettings", language: .simplifiedChinese) == "高级设置")
+        #expect(AppText.value("awakeAdvancedSettings", language: .english) == "Advanced Settings")
         #expect(AppText.value("awakeForceSleep", language: .simplifiedChinese) == "强制睡眠")
         #expect(AppText.value("awakeForceSleep", language: .english) == "Forced Sleep")
         #expect(AppText.value("awakeEndSessionBelowBattery", language: .simplifiedChinese, 15) == "当电量低于 15% 时结束会话")
@@ -330,6 +332,9 @@ struct AwakeTests {
     @Test func sessionProtectionDraftStartsWithStandardDefaults() {
         var previousDraft = AwakeSessionProtectionDraft()
         previousDraft.endOnForcedSleep = true
+        previousDraft.allowSystemSleepWhenDisplayOff = true
+        previousDraft.blockScreenSaver = true
+        previousDraft.screenSaverIdleMinutes = 90
         previousDraft.safetyPolicy.lowBatteryProtectionEnabled = false
         previousDraft.safetyPolicy.minimumBatteryLevel = 35
         previousDraft.warnBeforeBatteryTermination = true
@@ -340,6 +345,9 @@ struct AwakeTests {
 
         let nextDraft = AwakeSessionProtectionDraft()
         #expect(!nextDraft.endOnForcedSleep)
+        #expect(!nextDraft.allowSystemSleepWhenDisplayOff)
+        #expect(!nextDraft.blockScreenSaver)
+        #expect(nextDraft.screenSaverIdleMinutes == 45)
         #expect(nextDraft.safetyPolicy.lowBatteryProtectionEnabled)
         #expect(nextDraft.safetyPolicy.minimumBatteryLevel == 15)
         #expect(!nextDraft.warnBeforeBatteryTermination)
@@ -1303,6 +1311,9 @@ struct AwakeProfileOptionParityTests {
         settings.defaultPolicy.preventDisplaySleep = true
         var draft = AwakeSessionProtectionDraft()
         draft.endOnForcedSleep = true
+        draft.allowSystemSleepWhenDisplayOff = true
+        draft.blockScreenSaver = true
+        draft.screenSaverIdleMinutes = 70
         draft.safetyPolicy.lowBatteryProtectionEnabled = false
         draft.safetyPolicy.minimumBatteryLevel = 33
         draft.ignoreBatteryLevelOnExternalPower = false
@@ -1319,6 +1330,9 @@ struct AwakeProfileOptionParityTests {
         #expect(decoded.configuration.autoStartOnWake)
         #expect(decoded.configuration.durationMinutes == 75)
         #expect(decoded.configuration.preventDisplaySleep)
+        #expect(decoded.configuration.allowSystemSleepWhenDisplayOff)
+        #expect(decoded.configuration.blockScreenSaver)
+        #expect(decoded.configuration.screenSaverIdleMinutes == 70)
 
         var edited = decoded
         var changedDraft = editDraft
