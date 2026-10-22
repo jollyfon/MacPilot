@@ -2864,7 +2864,8 @@ struct QuickSearchFavoritesModelTests {
         #expect(harness.model.settings.favorites.count == 1)
 
         harness.model.toggleFavorite(target)
-        #expect(harness.model.results.map(\.title) == ["计算器", "Safari"])
+        // 索引按系统 locale 排序，中英文混排的前后顺序随语言变化；这里只断言两条都在。
+        #expect(harness.model.results.map(\.title).sorted() == ["Safari", "计算器"].sorted())
         #expect(harness.model.settings.favorites.isEmpty)
     }
 
