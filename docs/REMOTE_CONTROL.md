@@ -906,3 +906,92 @@ This repairs authenticated UUID association and keeps a bound phone discoverable
 while the app is backgrounded. It cannot survive app termination or an iOS
 suspension that tears the peripheral down. Automated acceptance must use isolated
 pure/mocked logic, never lock, blank or sleep the user's real screen.
+
+## Reversed-role BLE GATT feasibility (phase 1)
+
+Every other BLE path in this project has the Mac as the central and the iPhone
+as the peripheral. Background discovery and unlock would reverse that: the Mac
+advertises, the phone scans and connects. A previous reversed-role attempt never
+established a link, so this phase exists only to measure whether the radio path
+works on the target hardware. It is a gate, not a feature:
+
+- If the pure GATT link cannot be established on a real Mac + real iPhone, stop.
+  Do not start background modes, identity reuse, RSSI presence or unlock wiring.
+- Nothing in this harness authenticates the Mac, persists a key, produces a
+  proximity verdict or can lock/unlock anything.
+- It runs only while its screen is open and the user has pressed start. No
+  background mode, state restoration, L2CAP channel or unlock integration is
+  involved.
+
+The service uses a direction marker distinct from the existing phone-advertised
+service (`…0001-…`), so the two BLE roles can never be confused:
+
+| Characteristic | UUID suffix | Properties | Payload |
+| --- | --- | --- | --- |
+| Service | `6D616350-696C-6F74-0002-000000000001` | — | — |
+| Mac info | `…0002-000000000002` | read | 17 bytes: version `1` + 16-byte device UUID (zeros = not configured) |
+| Echo | `…0002-000000000003` | notify | 16 bytes, echoed by the Mac |
+| Response | `…0002-000000000004` | write | 16-byte nonce written by the phone |
+
+The phone reads Mac info, subscribes to Echo, writes a random 16-byte nonce to
+Response, and accepts the attempt only when the notification matches those bytes
+exactly. Payload rules live in `ProximityGATTService` in
+`MacPilotRemoteTransport`; the Mac and the phone must not grow separate copies.
+
+### On-device acceptance
+
+Use a real Mac and a real iPhone. Simulators cannot run this test. Bluetooth must
+be on for both, but no pairing, router or shared network is required. A configured
+remote-control identity is optional; without one the Mac info payload carries
+zeros and the test still passes.
+
+1. On the Mac, open MacPilot › BLE Unlock and find **GATT connectivity test
+   (experimental)**. Press **Start advertising** and expand **Event log**.
+   Expected status: *Advertising; waiting for the iPhone*. Expected log:
+   `radio on`, `publishing GATT service 6D616350-696C-6F74-0002-000000000001`,
+   `GATT service added; starting advertisement`, `advertising started`.
+2. On the iPhone, open PilotNest › Settings › Connection link › **GATT
+   connectivity test (experimental)** and press **Start scanning**. Keep PilotNest
+   in the foreground. Expected log order: `radio on`, `scanning for …`, a
+   `discovered … rssi=` line, `connected in N ms`, `service found`, `characteristics
+   found in N ms`, `Mac info version=1 …`, `subscribed in N ms`, `echo write
+   acknowledged; waiting for the notification`, and finally `echo verified in N ms`.
+   The status becomes *Echo verified (N ms)* and every stage in **Stage timings**
+   is filled.
+3. Check the Mac log: `central subscribed uuid=…`, `echoed 16 bytes to 1
+   subscriber(s)` and the **Last echo** timestamp. A phone that leaves without
+   pressing stop logs `central unsubscribed` and the Mac re-advertises.
+4. Press stop on both sides. Re-running the test must work without relaunching
+   either app; toggling Bluetooth off and on must also recover once the radio
+   returns to `poweredOn`.
+
+Pass criterion: the iPhone reaches *Echo verified* with an exact 16-byte match,
+and the Mac log shows the corresponding subscriber and echo. Record the iPhone
+and Mac models, OS versions, RSSI and both logs (PilotNest's test screen has
+**Export log**) with the acceptance result.
+
+### Failure map
+
+The test names the stage that failed, so report that stage instead of "BLE does
+not work":
+
+- **No discovery while the Mac says advertising** — the phone never saw the
+  advertisement. Check Bluetooth permission, that both apps are in the
+  foreground, and that the Mac did not report `advertising failed`.
+- **Connect fails or times out** — the advertisement was seen but a link was not
+  established. The phone log carries the CoreBluetooth error.
+- **Service or characteristics missing** — the GATT database did not publish as
+  built; the Mac log shows whether `didAdd service` returned an error.
+- **Mac info decode failed** — version or length disagreed with
+  `ProximityGATTMacInfo`; the phone log includes the received byte count.
+- **Subscribe failed** — the Echo characteristic did not accept notifications.
+- **Write fails** — the Response characteristic is missing its write permission.
+- **Write acknowledged but no echo** — the notification path failed; the Mac log
+  shows `echo not queued` when its buffer was unavailable.
+- **Timed out** — the phone gives each attempt 15 seconds and names the stage it
+  was in when the timeout fired.
+
+Automated tests cover only the wire contract and both localization tables
+(`ProximityGATTServiceTests`, `ProximityGATTLocalizationTests`,
+`RemoteTextProximityGATTTests`). They cannot prove that a Mac advertises or that
+an iPhone connects; only the on-device run above can.

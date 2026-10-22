@@ -539,6 +539,18 @@ enum AppText {
         "bleAdvertisementStalledMessage": "MacPilot 已经很长时间没有收到任何蓝牙广播，接近解锁暂时无法工作。扫描无回调不代表已确认系统故障；设备广播减少或连接异常也可能导致无新信号。MacPilot 会尝试恢复已绑定设备的连接，仅在收到新信号后允许自动解锁。",
         "bleConflictingInstanceTitle": "检测到其他 MacPilot 实例",
         "bleConflictingInstanceCount": "另有 %d 个 MacPilot 实例正在运行。此检测无法确认对方是否启用蓝牙功能，也不能据此认定存在蓝牙冲突。",
+        "proximityGATTTitle": "GATT 连通性测试（实验）",
+        "proximityGATTSubtitle": "在 Mac 上广播测试服务，等 PilotNest 连接并回传 16 字节数据。只验证反向 BLE 链路，不参与锁定或解锁。先在 Mac 开始广播，再到 PilotNest 的「设置 › 连接方式」里开始扫描。",
+        "proximityGATTStart": "开始广播",
+        "proximityGATTStop": "停止广播",
+        "proximityGATTStatusIdle": "未启动",
+        "proximityGATTStatusStarting": "正在启动…",
+        "proximityGATTStatusAdvertising": "正在广播，等待 iPhone 连接",
+        "proximityGATTStatusConnected": "iPhone 已连接",
+        "proximityGATTStatusFailed": "失败：%@",
+        "proximityGATTLog": "事件日志",
+        "proximityGATTLastEcho": "最近回环：%@",
+        "proximityGATTNoEvents": "还没有事件。",
         "remoteControl": "远程控制",
         "remoteControlSubtitle": "用同一局域网内的 iPhone 远程执行锁屏、黑屏、解锁和唤醒解锁。登录密码始终只保存在这台 Mac 上。",
         "remoteMobileAppTitle": "手机端 PilotNest",
@@ -1800,6 +1812,18 @@ enum AppText {
             "bleAdvertisementStalledMessage": "MacPilot has not received any Bluetooth advertisements for a long time, so proximity unlock cannot work right now. Missing scan callbacks do not establish a system failure; reduced advertising or connection problems may also cause missing signals. MacPilot will try to reconnect known devices and only allow automatic unlock after a fresh signal.",
             "bleConflictingInstanceTitle": "Other MacPilot instances detected",
             "bleConflictingInstanceCount": "%d other MacPilot instance(s) are running. This check cannot determine whether their Bluetooth features are enabled or establish a Bluetooth conflict.",
+            "proximityGATTTitle": "GATT connectivity test (experimental)",
+            "proximityGATTSubtitle": "Advertise a test service on the Mac, wait for PilotNest to connect and echo 16 bytes back. This only proves the reversed BLE link; it does not lock or unlock anything. Start advertising here first, then start scanning in PilotNest under Settings › Connection link.",
+            "proximityGATTStart": "Start advertising",
+            "proximityGATTStop": "Stop advertising",
+            "proximityGATTStatusIdle": "Not running",
+            "proximityGATTStatusStarting": "Starting…",
+            "proximityGATTStatusAdvertising": "Advertising; waiting for the iPhone",
+            "proximityGATTStatusConnected": "iPhone connected",
+            "proximityGATTStatusFailed": "Failed: %@",
+            "proximityGATTLog": "Event log",
+            "proximityGATTLastEcho": "Last echo: %@",
+            "proximityGATTNoEvents": "No events yet.",
             "remoteControl": "Remote Control",
             "remoteControlSubtitle": "Lock, blank, unlock and wake-and-unlock this Mac from an iPhone on the same local network. The login password never leaves this Mac.",
             "remoteMobileAppTitle": "PilotNest for iPhone and iPad",
@@ -5195,6 +5219,8 @@ struct BLEUnlockView: View {
     @State private var resetFailureMessage: String?
     @State private var sortMode: DeviceSortMode = .added
     @State private var showingHistoryClearConfirmation = false
+    @StateObject private var proximityProbe = ProximityBLEPeripheral()
+    @State private var showsProximityLog = false
 
     var body: some View {
         ScrollView {
@@ -5210,6 +5236,7 @@ struct BLEUnlockView: View {
                     optionsSection
                     actionsSection
                 }
+                proximityGATTSection
                 screenLockHistorySection
             }
             .padding(.horizontal, 36).padding(.top, 34).padding(.bottom, 30)
@@ -5231,6 +5258,7 @@ struct BLEUnlockView: View {
         .onDisappear {
             if showPicker { showPicker = false; ble.stopScanning() }
             pickingSecondary = false
+            proximityProbe.stop()
         }
     }
 
@@ -5638,6 +5666,88 @@ struct BLEUnlockView: View {
                 Spacer()
                 Button(model.t("bleLockNow")) { ble.lockNow() }.buttonStyle(.borderedProminent)
             }
+        }
+    }
+
+    private var proximityGATTSection: some View {
+        SettingsCard {
+            sectionTitle(model.t("proximityGATTTitle"))
+            Text(model.t("proximityGATTSubtitle"))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                Circle().fill(proximityStatusColor).frame(width: 8, height: 8)
+                Text(proximityStatusText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if proximityProbe.isRunning {
+                    Button(model.t("proximityGATTStop")) { proximityProbe.stop() }
+                } else {
+                    Button(model.t("proximityGATTStart")) {
+                        showsProximityLog = true
+                        proximityProbe.start(macDeviceID: configuredMacDeviceID)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
+            if let lastEchoAt = proximityProbe.lastEchoAt {
+                Text(model.t("proximityGATTLastEcho", lastEchoAt.formatted(date: .omitted, time: .standard)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            DisclosureGroup(isExpanded: $showsProximityLog) {
+                if proximityProbe.logLines.isEmpty {
+                    Text(model.t("proximityGATTNoEvents"))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(Array(proximityProbe.logLines.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.caption.monospaced())
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(8)
+                    }
+                    .frame(maxHeight: 180)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                }
+            } label: {
+                Text(model.t("proximityGATTLog")).font(.subheadline.weight(.medium))
+            }
+        }
+    }
+
+    private var configuredMacDeviceID: UUID? {
+        model.remoteDeviceStore.settings.deviceID.flatMap(UUID.init(uuidString:))
+    }
+
+    private var proximityStatusColor: Color {
+        switch proximityProbe.status {
+        case .idle: return .secondary
+        case .starting: return .orange
+        case .advertising: return .blue
+        case .connected: return .green
+        case .failed: return .red
+        }
+    }
+
+    private var proximityStatusText: String {
+        switch proximityProbe.status {
+        case .idle: return model.t("proximityGATTStatusIdle")
+        case .starting: return model.t("proximityGATTStatusStarting")
+        case .advertising: return model.t("proximityGATTStatusAdvertising")
+        case .connected: return model.t("proximityGATTStatusConnected")
+        case .failed(let reason): return model.t("proximityGATTStatusFailed", reason)
         }
     }
 

@@ -32,6 +32,7 @@
 		53EBF9F3C73568C0B0607EDA /* RemoteBLEAdvertisingPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDCA3C418F7432B3AF67C8E6 /* RemoteBLEAdvertisingPolicyTests.swift */; };
 		561351D0B1E1B4630DFB5532 /* RemoteBLEIdentityProbePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7093562EFA1A9CB73661828 /* RemoteBLEIdentityProbePolicy.swift */; };
 		58102F1CE9508E1A18B14846 /* RemoteSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE506F7AEC00BC4D65847C12 /* RemoteSettingsView.swift */; };
+		5C29B9FB744D1FABA97A6123 /* RemoteTextProximityGATTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19106FC5E6A5C2F45AA18822 /* RemoteTextProximityGATTTests.swift */; };
 		5F09E65FDAE093628B7C3BF1 /* ControlSectionOrderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E81ADDA4A7D54CF015D28FD0 /* ControlSectionOrderUITests.swift */; };
 		6E9F62D64507C5CC4E50142A /* RemoteVideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73F668EDF35E69390AC04692 /* RemoteVideoDecoder.swift */; };
 		70EB80CE61981CAF16DD2B71 /* ScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447CDE5B9C0AAC4C65F9D517 /* ScreenshotTests.swift */; };
@@ -44,6 +45,7 @@
 		8ABE53FBAA8C5E88D864E561 /* RemoteConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E02298CA997F794F399CD46 /* RemoteConnectionManager.swift */; };
 		8AD72A94074F0EECBBBB3670 /* RemoteBLEIdentityProbePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DDA158E305F0563D52F0AE /* RemoteBLEIdentityProbePolicyTests.swift */; };
 		8BCC090B7F4D8B0260BF0650 /* InputEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5B2D649254FA8EE4ED7FA7E /* InputEvent.swift */; };
+		8D6D76E9226863A28B84D3D6 /* ProximityBLECentral.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E580CCBC171179A06C7B9F0 /* ProximityBLECentral.swift */; };
 		921C9954593FA4F21A8FA466 /* VelocityCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11CCEAC5B50B59CC42724C3 /* VelocityCalculator.swift */; };
 		97D7FA550D676240482EF5B6 /* RemoteDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96FDC5169DB8CA6CDC1009EF /* RemoteDiscoveryService.swift */; };
 		9A1F5568F3ECD63FDD274EED /* TouchProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D152E96DBE715090384BAA76 /* TouchProcessor.swift */; };
@@ -54,6 +56,7 @@
 		AD1A6265CB77ADBDF69A32F8 /* RemoteAutomaticMacSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5B0D09B033A0991D0A7F09 /* RemoteAutomaticMacSelectionTests.swift */; };
 		AE22ED3FC0D9F79938EAFDB0 /* TouchHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F191E81E8CA9B2CCD4CF79A9 /* TouchHistory.swift */; };
 		AE3CA90F4FC1DCF98C3D983D /* SidecarDeviceSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E85CB3786D6F9876B2B4D79 /* SidecarDeviceSheet.swift */; };
+		AFBCE09BBFAA99511086C6E0 /* ProximityGATTTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C8954E6267138DC399ABFC9 /* ProximityGATTTestView.swift */; };
 		B2072638812E9D738D98CA6F /* PressureSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E2DE683D33CF6736C45DE3 /* PressureSample.swift */; };
 		B34AB35731C1146F2A3516C4 /* RemoteControlPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC707A41C6093408D63F5E10 /* RemoteControlPreferences.swift */; };
 		BA215FCD67694460D269A62D /* PressureCurve.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4083ECB0625AD91715E766A6 /* PressureCurve.swift */; };
@@ -96,6 +99,7 @@
 		0365A5FA06DEC796E7A3AFAD /* PressState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressState.swift; sourceTree = "<group>"; };
 		07C1EB6A722858B0212F438D /* MacPilotRemote.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MacPilotRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		09C3C7D3A57D31F56E250816 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		19106FC5E6A5C2F45AA18822 /* RemoteTextProximityGATTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTextProximityGATTTests.swift; sourceTree = "<group>"; };
 		1CEAD84B28A1735C296AEBF8 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
 		21D83AE67089B04DF8E33CDD /* RemoteVideoZoomTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoZoomTests.swift; sourceTree = "<group>"; };
 		2664C90B50B85054CF47D9B3 /* RemoteAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAppModel.swift; sourceTree = "<group>"; };
@@ -118,6 +122,7 @@
 		5AE3A75BF934E7F7884ACA12 /* RemoteKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteKeychain.swift; sourceTree = "<group>"; };
 		5F080E6D6418DFB7A61BB39C /* SidecarPanelPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarPanelPolicyTests.swift; sourceTree = "<group>"; };
 		66DDA158E305F0563D52F0AE /* RemoteBLEIdentityProbePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLEIdentityProbePolicyTests.swift; sourceTree = "<group>"; };
+		6C8954E6267138DC399ABFC9 /* ProximityGATTTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProximityGATTTestView.swift; sourceTree = "<group>"; };
 		6DD7E33EB369C3302C36BADA /* RemoteText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteText.swift; sourceTree = "<group>"; };
 		6E85CB3786D6F9876B2B4D79 /* SidecarDeviceSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDeviceSheet.swift; sourceTree = "<group>"; };
 		7152877F9A213F21809D5A07 /* RemoteDesktopView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopView.swift; sourceTree = "<group>"; };
@@ -125,6 +130,7 @@
 		781285C1ADB724EF9E3897A7 /* RemoteReconnectLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteReconnectLifecycleTests.swift; sourceTree = "<group>"; };
 		785EB92B352DD9B4153B1A56 /* InterfaceOrientationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfaceOrientationController.swift; sourceTree = "<group>"; };
 		7890B51F3A461DD34A2BF5C8 /* RemoteBLEPeripheral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBLEPeripheral.swift; sourceTree = "<group>"; };
+		7E580CCBC171179A06C7B9F0 /* ProximityBLECentral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProximityBLECentral.swift; sourceTree = "<group>"; };
 		82CA21A9B57090EDDD6FFE1B /* MacPilotRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPilotRemoteApp.swift; sourceTree = "<group>"; };
 		86A65F4B767DBDE239B16061 /* SidecarPanelPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarPanelPolicy.swift; sourceTree = "<group>"; };
 		88731EE963FEAFE686E6DAF3 /* TrackpadClickSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadClickSound.swift; sourceTree = "<group>"; };
@@ -200,6 +206,7 @@
 		04BEC7E993C260819B3BD1FE /* Settings */ = {
 			isa = PBXGroup;
 			children = (
+				6C8954E6267138DC399ABFC9 /* ProximityGATTTestView.swift */,
 				CE506F7AEC00BC4D65847C12 /* RemoteSettingsView.swift */,
 			);
 			path = Settings;
@@ -236,6 +243,7 @@
 		5AD0C433F771B6DB57F8406B /* Networking */ = {
 			isa = PBXGroup;
 			children = (
+				7E580CCBC171179A06C7B9F0 /* ProximityBLECentral.swift */,
 				A4481D6C6B9BFF7DB959D85C /* RemoteBLEAdvertisingPolicy.swift */,
 				D7093562EFA1A9CB73661828 /* RemoteBLEIdentityProbePolicy.swift */,
 				7890B51F3A461DD34A2BF5C8 /* RemoteBLEPeripheral.swift */,
@@ -371,6 +379,7 @@
 				F00C1B29E6E95D05262D3D9A /* RemoteControlPreferencesTests.swift */,
 				4FFFADB7FEE2749461D25A8E /* RemoteDiscoveryStateTests.swift */,
 				781285C1ADB724EF9E3897A7 /* RemoteReconnectLifecycleTests.swift */,
+				19106FC5E6A5C2F45AA18822 /* RemoteTextProximityGATTTests.swift */,
 				DE8A52135C3AB92A01DA4BAA /* RemoteTextSidecarStringsTests.swift */,
 				21D83AE67089B04DF8E33CDD /* RemoteVideoZoomTests.swift */,
 				5F080E6D6418DFB7A61BB39C /* SidecarPanelPolicyTests.swift */,
@@ -570,6 +579,7 @@
 				76DE2646AF35A8E17A3CC3EA /* RemoteControlPreferencesTests.swift in Sources */,
 				30541BD2DCFACD758D63B28C /* RemoteDiscoveryStateTests.swift in Sources */,
 				2CCED346F1F6F92AF0A9D473 /* RemoteReconnectLifecycleTests.swift in Sources */,
+				5C29B9FB744D1FABA97A6123 /* RemoteTextProximityGATTTests.swift in Sources */,
 				DD5925FB4DD0DF114B4EF739 /* RemoteTextSidecarStringsTests.swift in Sources */,
 				33110033AB36379243431578 /* RemoteVideoZoomTests.swift in Sources */,
 				F6924314EE6A88C196606455 /* SidecarPanelPolicyTests.swift in Sources */,
@@ -597,6 +607,8 @@
 				077A2BDE51FBE26CE12D7627 /* PressureIntentEngine.swift in Sources */,
 				B2072638812E9D738D98CA6F /* PressureSample.swift in Sources */,
 				E30CA50EFB637567B33E9A39 /* PressureScore.swift in Sources */,
+				8D6D76E9226863A28B84D3D6 /* ProximityBLECentral.swift in Sources */,
+				AFBCE09BBFAA99511086C6E0 /* ProximityGATTTestView.swift in Sources */,
 				2A4D3DB2192AC62F75C6B89D /* RemoteAppModel.swift in Sources */,
 				7393D511673B758035113D6E /* RemoteAutomaticMacSelection.swift in Sources */,
 				ACD17E20BAC4DFD273E72B98 /* RemoteBLEAdvertisingPolicy.swift in Sources */,

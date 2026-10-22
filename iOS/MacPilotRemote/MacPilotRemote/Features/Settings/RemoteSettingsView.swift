@@ -131,6 +131,17 @@ struct RemoteSettingsView: View {
                     }
                 }
 
+                Section {
+                    NavigationLink {
+                        ProximityGATTTestView()
+                    } label: {
+                        Label(appModel.text("proximityGATTTitle"), systemImage: "dot.radiowaves.left.and.right")
+                    }
+                    .accessibilityIdentifier("proximityGATT")
+                } footer: {
+                    Text(appModel.text("proximityGATTSettingsHint"))
+                }
+
                 if appModel.metrics != RemoteMetrics() {
                     Section(appModel.text("performance")) {
                         metricRow("metricDiscovery", appModel.metrics.discoveryLatencyMs)
